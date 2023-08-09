@@ -3,4 +3,5 @@ __pycache__/
 temp.png
 test/.pytest_cache/
 kb.xlsx
+~$kb.xlsx
 *.pyc
