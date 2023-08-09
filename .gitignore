@@ -1,0 +1,6 @@
+__pycache__/
+.idea/
+temp.png
+test/.pytest_cache/
+kb.xlsx
+*.pyc
