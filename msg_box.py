@@ -49,7 +49,7 @@ class MessageBox:
     def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS):
         msg_box = MessageBox()
         msg_box.showMsg(title, msg, level)
-        time.sleep(2)
+        time.sleep(5)
         win32gui.DestroyWindow(msg_box.hwnd)
 
 

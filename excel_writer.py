@@ -13,6 +13,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from excel_context import ExcelContext
 from msg_box import MessageBox, MessageType
+from process import ProcessManager
 
 
 class ExcelWriter:
@@ -94,9 +95,9 @@ class ExcelWriter:
         anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset())
         self._active_worksheet[anchor] = txt
         self._workbook.save(self._excel_path)
-        logging.info(f'saved text：{txt}!')
+        logging.info(f'saved text: {txt}!')
 
-    def save(self, data: PILImage or str):
+    def save(self, data: PILImage or str, ignore_permission_error: bool = False):
         try:
             if data:
                 if isinstance(data, PILImage):
@@ -106,6 +107,21 @@ class ExcelWriter:
                 MessageBox.pop_up_message('Success', str(data), MessageType.SUCCESS)
             else:
                 logging.info(f'Nothing to save!')
+        except PermissionError as permission_ex:
+            if not ignore_permission_error:
+                logging.info(f'try to terminate process for {self._excel_path}')
+                ProcessManager.terminate_by_path(self._excel_path)
+                try:
+                    self._workbook.save(self._excel_path)
+                    MessageBox.pop_up_message('Success', str(data), MessageType.SUCCESS)
+                except Exception as ex:
+                    logging.exception(f'failed to save "{data}"')
+                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
+
+                # ProcessManager.resume_last_closed_process()
+            else:
+                logging.exception(f'failed to save "{data}"')
+                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR)
         except Exception as ex:
             logging.exception(f'failed to save "{data}"')
             MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
