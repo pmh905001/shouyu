@@ -36,7 +36,7 @@ class MessageBox:
                msg,
                0,
                title,
-               win32gui.NIIF_INFO if level == MessageType.SUCCESS else win32gui.NIIF_ERROR
+               win32gui.NIIF_INFO + win32gui.NIIF_NOSOUND if level == MessageType.SUCCESS else win32gui.NIIF_ERROR
                )
         win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
 
