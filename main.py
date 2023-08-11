@@ -33,7 +33,7 @@ def move_column(step=0):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     keyboard.add_hotkey('ctrl+\\', save_clipboard)
-    keyboard.add_hotkey('windows+ctrl+right', move_column, args=(1,))
-    keyboard.add_hotkey('windows+ctrl+left', move_column, args=(-1,))
+    keyboard.add_hotkey('ctrl+right', move_column, args=(1,))
+    keyboard.add_hotkey('ctrl+left', move_column, args=(-1,))
     keyboard.add_hotkey('ctrl+c', do_copy_2_times)
     keyboard.wait()

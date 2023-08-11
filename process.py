@@ -16,7 +16,6 @@ class ProcessManager:
         try:
             return file_path in ','.join(proc.cmdline())
         except AccessDenied:
-            logging.warning(f'Ignore pid: {proc.pid}')
             return False
 
     @staticmethod
