@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import keyboard
@@ -7,15 +8,21 @@ from PIL import ImageGrab
 
 from excel_context import ExcelContext
 from excel_writer import ExcelWriter
+from tray import Tray
 
 
 def save_clipboard():
-    img = ImageGrab.grabclipboard()
-    copied_text = pyperclip.paste()
-    ExcelWriter('kb.xlsx').save(img or copied_text)
+    try:
+        img = ImageGrab.grabclipboard()
+        copied_text = pyperclip.paste()
+        ExcelWriter('kb.xlsx').save(img or copied_text)
+    except:
+        logging.exception('occurred un-expect exception!')
 
 
 last_time = 0
+
+
 def do_copy_2_times():
     global last_time
     current_time = time.time()
@@ -36,4 +43,5 @@ if __name__ == '__main__':
     keyboard.add_hotkey('ctrl+right', move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', move_column, args=(-1,))
     keyboard.add_hotkey('ctrl+c', do_copy_2_times)
+    threading.Thread(target=Tray.create, daemon=False).start()
     keyboard.wait()
