@@ -2,7 +2,7 @@ import psutil
 import pystray
 from PIL import Image
 from pystray import MenuItem
-import sys
+
 
 class Tray:
     @classmethod

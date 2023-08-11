@@ -8,6 +8,7 @@ from PIL import ImageGrab
 
 from excel_context import ExcelContext
 from excel_writer import ExcelWriter
+from process import ProcessManager
 from tray import Tray
 
 
@@ -39,7 +40,9 @@ def move_column(step=0):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    keyboard.add_hotkey('ctrl+\\', save_clipboard)
+    keyboard.add_hotkey('ctrl+enter', save_clipboard)
+    keyboard.add_hotkey('ctrl+\\', ProcessManager.resume_last_closed_process,args=('kb.xlsx',))
+    keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path,args=('kb.xlsx',))
     keyboard.add_hotkey('ctrl+right', move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', move_column, args=(-1,))
     keyboard.add_hotkey('ctrl+c', do_copy_2_times)
