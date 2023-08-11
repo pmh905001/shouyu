@@ -1,8 +1,11 @@
 import logging
+import os
 import time
 
 import psutil
 from psutil import AccessDenied
+
+import threading
 
 
 class ProcessManager:
@@ -39,15 +42,14 @@ class ProcessManager:
         if not procs:
             procs = [proc for proc in psutil.process_iter() if cls.is_process_name_accepted(proc)]
 
-        cls._last_closed_processes = procs
         if procs:
             cls.terminate_and_wait(procs)
         return procs
 
-    @classmethod
-    def resume_last_closed_process(cls):
-        for p in cls._last_closed_processes:
-            p.resume()
+    @staticmethod
+    def resume_last_closed_process(excel_path):
+        threading.Thread(target=os.system,args=(excel_path,)).start()
+        # os.system(excel_path)
 
 
 if __name__ == '__main__':

@@ -118,7 +118,7 @@ class ExcelWriter:
                     logging.exception(f'failed to save "{data}"')
                     MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
 
-                # ProcessManager.resume_last_closed_process()
+                ProcessManager.resume_last_closed_process(self._excel_path)
             else:
                 logging.exception(f'failed to save "{data}"')
                 MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR)
