@@ -46,5 +46,6 @@ if __name__ == '__main__':
     keyboard.add_hotkey('ctrl+right', move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', move_column, args=(-1,))
     keyboard.add_hotkey('ctrl+c', do_copy_2_times)
-    threading.Thread(target=Tray.create, daemon=False).start()
+    icon=Tray.create()
+    threading.Thread(target=icon.run, daemon=False).start()
     keyboard.wait()

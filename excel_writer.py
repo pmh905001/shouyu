@@ -14,6 +14,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from excel_context import ExcelContext
 from msg_box import MessageBox, MessageType
 from process import ProcessManager
+from tray import Tray
 
 
 class ExcelWriter:
@@ -105,6 +106,7 @@ class ExcelWriter:
                 else:
                     self._save_text(data)
                 MessageBox.pop_up_message('Success', str(data), MessageType.SUCCESS)
+                # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')
         except PermissionError as permission_ex:

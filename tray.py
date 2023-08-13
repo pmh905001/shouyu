@@ -5,13 +5,16 @@ from pystray import MenuItem
 
 
 class Tray:
+    _icon: pystray.Icon = None
+
     @classmethod
     def create(cls):
         menu = (
             MenuItem(text='退出', action=cls.on_exit),
         )
         icon = pystray.Icon("name", Image.open("fish.png"), "shouyu", menu)
-        icon.run()
+        cls._icon = icon
+        return icon
 
     @classmethod
     def on_exit(cls, icon, item):
@@ -19,5 +22,6 @@ class Tray:
         psutil.Process().terminate()
         # sys.exit()
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     Tray.create()
