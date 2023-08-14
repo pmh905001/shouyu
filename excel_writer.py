@@ -140,9 +140,11 @@ class ExcelWriter:
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
+        from_column = get_column_letter(column_index)
+        to_column = get_column_letter(column_index + ExcelContext.steps)
         if steps > 0:
-            return f'{get_column_letter(column_index)} -> {get_column_letter(column_index + ExcelContext.steps)}'
+            return f'{from_column} -> {to_column}'
         elif steps == 0:
-            return get_column_letter(column_index)
+            return from_column
         else:
-            return f'{get_column_letter(column_index + ExcelContext.steps)} <- {get_column_letter(column_index)}'
+            return f'{to_column} <- {from_column}'
