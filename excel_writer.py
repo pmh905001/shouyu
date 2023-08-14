@@ -136,7 +136,11 @@ class ExcelWriter:
             ExcelContext.steps = 1 - column_index
 
         logging.info(f'move {ExcelContext.steps} steps')
-        MessageBox.pop_up_message('Move', self._generate_move_message(column_index,ExcelContext.steps), MessageType.SUCCESS)
+        MessageBox.pop_up_message(
+            'Move',
+            self._generate_move_message(column_index, ExcelContext.steps),
+            MessageType.SUCCESS
+        )
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
