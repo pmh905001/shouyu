@@ -7,14 +7,14 @@ from typing import Union
 import openpyxl
 from PIL.Image import Image as PILImage
 from openpyxl.drawing.image import Image
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
+from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from excel_context import ExcelContext
 from msg_box import MessageBox, MessageType
 from process import ProcessManager
-from tray import Tray
 
 
 class ExcelWriter:
@@ -127,3 +127,22 @@ class ExcelWriter:
         except Exception as ex:
             logging.exception(f'failed to save "{data}"')
             MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
+
+    def move_column(self, step=0):
+        ExcelContext.steps += step
+        old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
+        column_index = column_index_from_string(old)
+        if column_index + ExcelContext.steps < 1:
+            ExcelContext.steps = 1 - column_index
+
+        logging.info(f'move {ExcelContext.steps} steps')
+        MessageBox.pop_up_message('Move', self._generate_move_message(column_index,ExcelContext.steps), MessageType.SUCCESS)
+
+    @staticmethod
+    def _generate_move_message(column_index: int, steps: int):
+        if steps > 0:
+            return f'{get_column_letter(column_index)} -> {get_column_letter(column_index + ExcelContext.steps)}'
+        elif steps == 0:
+            return get_column_letter(column_index)
+        else:
+            return f'{get_column_letter(column_index + ExcelContext.steps)} <- {get_column_letter(column_index)}'

@@ -6,7 +6,6 @@ import keyboard
 import pyperclip
 from PIL import ImageGrab
 
-from excel_context import ExcelContext
 from excel_writer import ExcelWriter
 from process import ProcessManager
 from tray import Tray
@@ -33,19 +32,15 @@ def do_copy_2_times():
         last_time = current_time
 
 
-def move_column(step=0):
-    ExcelContext.steps += step
-    logging.info(f'move {ExcelContext.steps} steps')
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     keyboard.add_hotkey('ctrl+enter', save_clipboard)
     keyboard.add_hotkey('ctrl+\\', ProcessManager.resume_last_closed_process, args=('kb.xlsx',))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=('kb.xlsx',))
-    keyboard.add_hotkey('ctrl+right', move_column, args=(1,))
-    keyboard.add_hotkey('ctrl+left', move_column, args=(-1,))
+    keyboard.add_hotkey('ctrl+right', ExcelWriter('kb.xlsx').move_column, args=(1,))
+    keyboard.add_hotkey('ctrl+left', ExcelWriter('kb.xlsx').move_column, args=(-1,))
+
     keyboard.add_hotkey('ctrl+c', do_copy_2_times)
-    icon=Tray.create()
+    icon = Tray.create()
     threading.Thread(target=icon.run, daemon=False).start()
     keyboard.wait()
