@@ -23,7 +23,7 @@ def save_clipboard():
 last_time = 0
 
 
-def do_copy_2_times():
+def save_clipboard_by_copy_2_times():
     global last_time
     current_time = time.time()
     if current_time - last_time < 3:
@@ -35,12 +35,12 @@ def do_copy_2_times():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     keyboard.add_hotkey('ctrl+enter', save_clipboard)
-    keyboard.add_hotkey('ctrl+\\', ProcessManager.resume_last_closed_process, args=('kb.xlsx',))
+    keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=('kb.xlsx',))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=('kb.xlsx',))
     keyboard.add_hotkey('ctrl+right', ExcelWriter('kb.xlsx').move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', ExcelWriter('kb.xlsx').move_column, args=(-1,))
 
-    keyboard.add_hotkey('ctrl+c', do_copy_2_times)
+    keyboard.add_hotkey('ctrl+c', save_clipboard_by_copy_2_times)
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=False).start()
     keyboard.wait()

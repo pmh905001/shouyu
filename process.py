@@ -46,9 +46,9 @@ class ProcessManager:
         return procs
 
     @staticmethod
-    def resume_last_closed_process(excel_path):
-        threading.Thread(target=os.system,args=(excel_path,)).start()
-        # os.system(excel_path)
+    def open(excel_path):
+        # if call os.system(excel_path), system will be blocked, shortcut would not task effects.
+        threading.Thread(target=os.system, args=(excel_path,)).start()
 
 
 if __name__ == '__main__':
