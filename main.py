@@ -10,6 +10,9 @@ from excel_writer import ExcelWriter
 from process import ProcessManager
 from tray import Tray
 
+last_copy_time = 0
+last_ctrl_time = 0
+
 
 def save_clipboard():
     try:
@@ -20,27 +23,37 @@ def save_clipboard():
         logging.exception('occurred un-expect exception!')
 
 
-last_time = 0
-
-
 def save_clipboard_by_copy_2_times():
-    global last_time
+    global last_copy_time
     current_time = time.time()
-    if current_time - last_time < 3:
+    if current_time - last_copy_time < 3:
         save_clipboard()
     else:
-        last_time = current_time
+        last_copy_time = current_time
+
+
+def show_column_by_ctrl_2_times():
+    global last_ctrl_time
+    current_time = time.time()
+    if current_time - last_ctrl_time < 3:
+        ExcelWriter('kb.xlsx').move_column(0)
+    else:
+        last_ctrl_time = current_time
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
+    # save clipboard to kb.xlsx
+    keyboard.add_hotkey('ctrl+c', save_clipboard_by_copy_2_times)
     keyboard.add_hotkey('ctrl+enter', save_clipboard)
+    # Open or close kb.xlsx
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=('kb.xlsx',))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=('kb.xlsx',))
+    # show or move current column position
     keyboard.add_hotkey('ctrl+right', ExcelWriter('kb.xlsx').move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', ExcelWriter('kb.xlsx').move_column, args=(-1,))
+    keyboard.add_hotkey('ctrl', show_column_by_ctrl_2_times)
 
-    keyboard.add_hotkey('ctrl+c', save_clipboard_by_copy_2_times)
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=False).start()
     keyboard.wait()
