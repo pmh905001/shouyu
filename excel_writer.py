@@ -139,7 +139,8 @@ class ExcelWriter:
         MessageBox.pop_up_message(
             'Move',
             self._generate_move_message(column_index, ExcelContext.steps),
-            MessageType.SUCCESS
+            MessageType.SUCCESS,
+            2
         )
 
     @staticmethod

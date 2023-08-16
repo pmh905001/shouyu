@@ -45,10 +45,10 @@ class MessageBox:
         win32gui.PostQuitMessage(0)  # Terminate the app.
 
     @classmethod
-    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS):
+    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5):
         msg_box = MessageBox()
         msg_box.showMsg(title, msg, level)
-        time.sleep(5)
+        time.sleep(duration)
         win32gui.DestroyWindow(msg_box.hwnd)
 
 
