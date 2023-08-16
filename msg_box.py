@@ -1,4 +1,3 @@
-# coding: cp936
 from enum import Enum
 
 import win32gui

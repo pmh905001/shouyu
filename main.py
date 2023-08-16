@@ -32,7 +32,7 @@ def save_clipboard_by_copy_2_times():
         last_copy_time = current_time
 
 
-def show_column_by_ctrl_2_times():
+def show_column_by_shift_2_times():
     global last_ctrl_time
     current_time = time.time()
     if current_time - last_ctrl_time < 3:
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     # show or move current column position
     keyboard.add_hotkey('ctrl+right', ExcelWriter('kb.xlsx').move_column, args=(1,))
     keyboard.add_hotkey('ctrl+left', ExcelWriter('kb.xlsx').move_column, args=(-1,))
-    keyboard.add_hotkey('ctrl', show_column_by_ctrl_2_times)
+    keyboard.add_hotkey('shift', show_column_by_shift_2_times)
 
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=False).start()
