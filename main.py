@@ -13,7 +13,7 @@ from task_queue import TaskExecutor
 from tray import Tray
 
 last_copy_time = 0
-last_ctrl_time = 0
+last_show_time = 0
 
 
 def save_clipboard():
@@ -34,13 +34,13 @@ def save_clipboard_by_copy_2_times():
         last_copy_time = current_time
 
 
-def show_column_by_shift_2_times():
-    global last_ctrl_time
+def show_column():
+    global last_show_time
     current_time = time.time()
-    if current_time - last_ctrl_time < 3:
+    if current_time - last_show_time < 3:
         ExcelWriter().move_column(0)
     else:
-        last_ctrl_time = current_time
+        last_show_time = current_time
 
 
 if __name__ == '__main__':
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     keyboard.add_hotkey('tab+right', executor.add, args=(lambda x: ExcelWriter().move_column(x), (1,)))
     keyboard.add_hotkey('tab+left', executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
     keyboard.add_hotkey('home', executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
-    keyboard.add_hotkey('shift', executor.add, args=(show_column_by_shift_2_times, ()))
+    keyboard.add_hotkey('alt', executor.add, args=(show_column, ()))
 
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=True).start()
