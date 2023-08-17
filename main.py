@@ -52,6 +52,9 @@ if __name__ == '__main__':
     # save clipboard to kb.xlsx
     keyboard.add_hotkey('ctrl+c', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     keyboard.add_hotkey('ctrl+enter', executor.add, args=(save_clipboard, ()))
+    keyboard.add_hotkey('print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
+    keyboard.add_hotkey('alt+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
+    keyboard.add_hotkey('windows+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     # Open or close kb.xlsx
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=(ExcelContext.excel_path,))
