@@ -9,6 +9,7 @@ from PIL import ImageGrab
 from excel_context import ExcelContext
 from excel_writer import ExcelWriter
 from process import ProcessManager
+from task_queue import TaskExecutor
 from tray import Tray
 
 last_copy_time = 0
@@ -44,16 +45,20 @@ def show_column_by_shift_2_times():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
+
+    executor = TaskExecutor()
+    threading.Thread(target=executor.run, daemon=True).start()
+
     # save clipboard to kb.xlsx
-    keyboard.add_hotkey('ctrl+c', save_clipboard_by_copy_2_times)
-    keyboard.add_hotkey('ctrl+enter', save_clipboard)
+    keyboard.add_hotkey('ctrl+c', executor.add, args=(save_clipboard_by_copy_2_times, ()))
+    keyboard.add_hotkey('ctrl+enter', executor.add, args=(save_clipboard, ()))
     # Open or close kb.xlsx
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=(ExcelContext.excel_path,))
     # show or move current column position
-    keyboard.add_hotkey('ctrl+right', ExcelWriter().move_column, args=(1,))
-    keyboard.add_hotkey('ctrl+left', ExcelWriter().move_column, args=(-1,))
-    keyboard.add_hotkey('shift', show_column_by_shift_2_times)
+    keyboard.add_hotkey('ctrl+right', executor.add, args=(lambda x: ExcelWriter().move_column(x), (1,)))
+    keyboard.add_hotkey('ctrl+left', executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
+    keyboard.add_hotkey('shift', executor.add, args=(show_column_by_shift_2_times, ()))
 
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=True).start()

@@ -9,8 +9,6 @@ import threading
 
 
 class ProcessManager:
-    _last_closed_processes: psutil.Process = None
-
     @staticmethod
     def is_file_path_accepted(file_path, proc):
         try:
