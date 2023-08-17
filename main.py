@@ -56,8 +56,9 @@ if __name__ == '__main__':
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=(ExcelContext.excel_path,))
     # show or move current column position
-    keyboard.add_hotkey('ctrl+right', executor.add, args=(lambda x: ExcelWriter().move_column(x), (1,)))
-    keyboard.add_hotkey('ctrl+left', executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
+    keyboard.add_hotkey('tab+right', executor.add, args=(lambda x: ExcelWriter().move_column(x), (1,)))
+    keyboard.add_hotkey('tab+left', executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
+    keyboard.add_hotkey('home', executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
     keyboard.add_hotkey('shift', executor.add, args=(show_column_by_shift_2_times, ()))
 
     icon = Tray.create()

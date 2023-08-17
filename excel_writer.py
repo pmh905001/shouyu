@@ -146,6 +146,20 @@ class ExcelWriter:
             2
         )
 
+    def move_to_home(self):
+        old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
+        column_index = column_index_from_string(old)
+        ExcelContext.steps = 1 - column_index
+
+        if ExcelContext.steps:
+            logging.info(f'move {ExcelContext.steps} steps')
+        MessageBox.pop_up_message(
+            'Move',
+            self._generate_move_message(column_index, ExcelContext.steps),
+            MessageType.SUCCESS,
+            2
+        )
+
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)
