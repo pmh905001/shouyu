@@ -134,8 +134,11 @@ class ExcelWriter:
         column_index = column_index_from_string(old)
         if column_index + ExcelContext.steps < 1:
             ExcelContext.steps = 1 - column_index
+        if column_index + ExcelContext.steps > 16384:
+            ExcelContext.steps = 16384 - column_index
 
-        logging.info(f'move {ExcelContext.steps} steps')
+        if ExcelContext.steps:
+            logging.info(f'move {ExcelContext.steps} steps')
         MessageBox.pop_up_message(
             'Move',
             self._generate_move_message(column_index, ExcelContext.steps),

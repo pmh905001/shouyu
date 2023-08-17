@@ -55,5 +55,5 @@ if __name__ == '__main__':
     keyboard.add_hotkey('shift', show_column_by_shift_2_times)
 
     icon = Tray.create()
-    threading.Thread(target=icon.run, daemon=False).start()
+    threading.Thread(target=icon.run, daemon=True).start()
     keyboard.wait()
