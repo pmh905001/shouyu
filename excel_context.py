@@ -2,6 +2,7 @@ import logging
 
 
 class ExcelContext:
+    excel_path = 'kb.xlsx'
     steps = 0
 
     @classmethod

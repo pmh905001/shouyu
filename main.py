@@ -6,6 +6,7 @@ import keyboard
 import pyperclip
 from PIL import ImageGrab
 
+from excel_context import ExcelContext
 from excel_writer import ExcelWriter
 from process import ProcessManager
 from tray import Tray
@@ -18,7 +19,7 @@ def save_clipboard():
     try:
         img = ImageGrab.grabclipboard()
         copied_text = pyperclip.paste()
-        ExcelWriter('kb.xlsx').save(img or copied_text)
+        ExcelWriter().save(img or copied_text)
     except:
         logging.exception('occurred un-expect exception!')
 
@@ -36,7 +37,7 @@ def show_column_by_shift_2_times():
     global last_ctrl_time
     current_time = time.time()
     if current_time - last_ctrl_time < 3:
-        ExcelWriter('kb.xlsx').move_column(0)
+        ExcelWriter().move_column(0)
     else:
         last_ctrl_time = current_time
 
@@ -47,11 +48,11 @@ if __name__ == '__main__':
     keyboard.add_hotkey('ctrl+c', save_clipboard_by_copy_2_times)
     keyboard.add_hotkey('ctrl+enter', save_clipboard)
     # Open or close kb.xlsx
-    keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=('kb.xlsx',))
-    keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=('kb.xlsx',))
+    keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
+    keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=(ExcelContext.excel_path,))
     # show or move current column position
-    keyboard.add_hotkey('ctrl+right', ExcelWriter('kb.xlsx').move_column, args=(1,))
-    keyboard.add_hotkey('ctrl+left', ExcelWriter('kb.xlsx').move_column, args=(-1,))
+    keyboard.add_hotkey('ctrl+right', ExcelWriter().move_column, args=(1,))
+    keyboard.add_hotkey('ctrl+left', ExcelWriter().move_column, args=(-1,))
     keyboard.add_hotkey('shift', show_column_by_shift_2_times)
 
     icon = Tray.create()

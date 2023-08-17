@@ -19,7 +19,7 @@ from process import ProcessManager
 
 class ExcelWriter:
 
-    def __init__(self, excel_path):
+    def __init__(self, excel_path=ExcelContext.excel_path):
         self._excel_path = excel_path
         self._worksheet_name = time.strftime('%Y-%m-%d')
         self._workbook: Workbook = self._load_workbook()
