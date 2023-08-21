@@ -16,7 +16,7 @@ class Tray:
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
 
         )
-        icon = pystray.Icon("name", Image.open("fish.png"), "shouyu", menu)
+        icon = pystray.Icon("name", Image.open("fish.jpg"), "shouyu", menu)
         cls._icon = icon
         return icon
 
