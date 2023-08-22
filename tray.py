@@ -1,3 +1,6 @@
+import os
+import sys
+
 import psutil
 import pystray
 from PIL import Image
@@ -9,6 +12,12 @@ from process import ProcessManager
 class Tray:
     _icon: pystray.Icon = None
 
+    @staticmethod
+    def get_resource_path(relative_path):
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.join(sys._MEIPASS, relative_path)
+        return os.path.join(os.path.abspath("."), relative_path)
+
     @classmethod
     def create(cls):
         menu = (
@@ -16,7 +25,7 @@ class Tray:
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
 
         )
-        icon = pystray.Icon("name", Image.open("fish.jpg"), "shouyu", menu)
+        icon = pystray.Icon("name", Image.open(cls.get_resource_path("fish.jpg")), "shouyu", menu)
         cls._icon = icon
         return icon
 
