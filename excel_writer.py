@@ -52,14 +52,17 @@ class ExcelWriter:
         max_image = self._find_max_image(worksheet)
         if max_image:
             if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
-                return max_image.anchor
+                return max_image.anchor, max_image
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
+                anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}',
+                return anchor, self._active_worksheet[anchor].value
         else:
             if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
-                return 'A1'
+                anchor = 'A1'
+                return anchor, self._active_worksheet[anchor].value
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
+                anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
+                return anchor, self._active_worksheet[anchor].value
 
     def _next_anchor(self, worksheet: Union[str, Worksheet], column_offset: int = 0) -> str:
         if isinstance(worksheet, str):
@@ -153,6 +156,7 @@ class ExcelWriter:
             MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
 
     def move_column(self, step=0):
+        anchor_or_image = self.current_anchor(self._active_worksheet)
         ExcelContext.steps += step
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
         column_index = column_index_from_string(old)
@@ -164,8 +168,8 @@ class ExcelWriter:
         if ExcelContext.steps:
             logging.info(f'move {ExcelContext.steps} steps')
         MessageBox.pop_up_message(
-            'Move',
             self._generate_move_message(column_index, ExcelContext.steps),
+            f'{anchor_or_image[0]}: {"Image" if anchor_or_image[1] is Image else anchor_or_image[1]}',
             MessageType.SUCCESS,
             2
         )
@@ -189,8 +193,8 @@ class ExcelWriter:
         from_column = get_column_letter(column_index)
         to_column = get_column_letter(column_index + ExcelContext.steps)
         if steps > 0:
-            return f'{from_column} -> {to_column}'
+            return f'Move {from_column} -> {to_column}'
         elif steps == 0:
             return from_column
         else:
-            return f'{to_column} <- {from_column}'
+            return f'Move {to_column} <- {from_column}'
