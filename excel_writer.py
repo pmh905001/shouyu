@@ -41,6 +41,26 @@ class ExcelWriter:
             self._workbook.active = worksheet
         return worksheet
 
+    def current_anchor(self, worksheet: Union[str, Worksheet]) -> str:
+        if isinstance(worksheet, str):
+            worksheet: Worksheet = self._workbook.get_sheet_by_name(worksheet)
+        elif isinstance(worksheet, Worksheet):
+            worksheet: Worksheet = worksheet
+        else:
+            raise RuntimeError(f'Invalid worksheet')
+
+        max_image = self._find_max_image(worksheet)
+        if max_image:
+            if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
+                return max_image.anchor
+            else:
+                return f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
+        else:
+            if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
+                return 'A1'
+            else:
+                return f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
+
     def _next_anchor(self, worksheet: Union[str, Worksheet], column_offset: int = 0) -> str:
         if isinstance(worksheet, str):
             worksheet: Worksheet = self._workbook.get_sheet_by_name(worksheet)
@@ -89,23 +109,26 @@ class ExcelWriter:
         tmp_img = 'temp.png'
         img.save(tmp_img)
         self._active_worksheet.add_image(Image(tmp_img), anchor)
-        self._workbook.save(self._excel_path)
         logging.info('saved image!')
+        return anchor
 
     def _save_text(self, txt: str):
         anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset())
         self._active_worksheet[anchor] = txt
-        self._workbook.save(self._excel_path)
         logging.info(f'saved text: {txt}!')
+        return anchor
 
     def save(self, data: PILImage or str, ignore_permission_error: bool = False):
+        msg = None
         try:
             if data:
                 if isinstance(data, PILImage):
-                    self._save_image(data)
+                    anchor = self._save_image(data)
                 else:
-                    self._save_text(data)
-                MessageBox.pop_up_message('Success', str(data), MessageType.SUCCESS)
+                    anchor = self._save_text(data)
+                msg = f'{anchor}: {str(data)}'
+                self._workbook.save(self._excel_path)
+                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
                 # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')
@@ -114,8 +137,9 @@ class ExcelWriter:
                 logging.info(f'try to terminate process for {self._excel_path}')
                 ProcessManager.terminate_by_path(self._excel_path)
                 try:
+
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', str(data), MessageType.SUCCESS)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
                 except Exception as ex:
                     logging.exception(f'failed to save "{data}"')
                     MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)

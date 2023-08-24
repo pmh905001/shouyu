@@ -55,6 +55,12 @@ if __name__ == '__main__':
     keyboard.add_hotkey('print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     keyboard.add_hotkey('alt+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     keyboard.add_hotkey('windows+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
+    keyboard.add_hotkey(
+        'ctrl+_',
+        executor.add,
+        args=(lambda x: ExcelWriter().save(x), ('-------------------------------------------------------------------',))
+    )
+
     # Open or close kb.xlsx
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
     keyboard.add_hotkey('ctrl+q', ProcessManager.terminate_by_path, args=(ExcelContext.excel_path,))

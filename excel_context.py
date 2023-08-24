@@ -1,8 +1,10 @@
 import logging
 
+from config import ConfigManager
+
 
 class ExcelContext:
-    excel_path = 'kb.xlsx'
+    excel_path = ConfigManager.get('excel_path', 'kb.xlsx')
     steps = 0
 
     @classmethod
