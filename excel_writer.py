@@ -54,7 +54,7 @@ class ExcelWriter:
             if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
                 return max_image.anchor, max_image
             else:
-                anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}',
+                anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
                 return anchor, self._active_worksheet[anchor].value
         else:
             if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
@@ -64,7 +64,7 @@ class ExcelWriter:
                 anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
                 return anchor, self._active_worksheet[anchor].value
 
-    def _next_anchor(self, worksheet: Union[str, Worksheet], column_offset: int = 0) -> str:
+    def _next_anchor(self, worksheet: Union[str, Worksheet], column_offset: int = 0, row_offset: int = 0) -> str:
         if isinstance(worksheet, str):
             worksheet: Worksheet = self._workbook.get_sheet_by_name(worksheet)
         elif isinstance(worksheet, Worksheet):
@@ -75,14 +75,14 @@ class ExcelWriter:
         max_image = self._find_max_image(worksheet)
         if max_image:
             if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
-                return f'{get_column_letter(max_image.anchor._from.col + 1 + column_offset)}{max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1}'
+                return f'{get_column_letter(max_image.anchor._from.col + 1 + column_offset)}{max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1 + row_offset}'
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1}'
+                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1 + row_offset}'
         else:
             if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
-                return 'A1'
+                return f'A{1 + row_offset}'
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1}'
+                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1 + row_offset}'
 
     @staticmethod
     def _find_max_image(sheet: Worksheet) -> Image:
@@ -107,28 +107,26 @@ class ExcelWriter:
 
         return 1
 
-    def _save_image(self, img: PILImage):
-        anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset())
+    def _save_image(self, img: PILImage, anchor: str):
         tmp_img = 'temp.png'
         img.save(tmp_img)
         self._active_worksheet.add_image(Image(tmp_img), anchor)
         logging.info('saved image!')
-        return anchor
 
-    def _save_text(self, txt: str):
-        anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset())
+    def _save_text(self, txt: str, anchor: str):
         self._active_worksheet[anchor] = txt
         logging.info(f'saved text: {txt}!')
-        return anchor
 
     def save(self, data: PILImage or str, ignore_permission_error: bool = False):
         msg = None
         try:
-            if data:
+            if data is not None:
+                anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset(),
+                                           ExcelContext.get_row_steps_and_reset())
                 if isinstance(data, PILImage):
-                    anchor = self._save_image(data)
+                    self._save_image(data, anchor)
                 else:
-                    anchor = self._save_text(data)
+                    self._save_text(data, anchor)
                 msg = f'{anchor}: {str(data)}'
                 self._workbook.save(self._excel_path)
                 MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
@@ -173,6 +171,9 @@ class ExcelWriter:
             MessageType.SUCCESS,
             2
         )
+
+    def insert_row_sperator(self, step=0):
+        ExcelContext.row_steps += step
 
     def move_to_home(self):
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]

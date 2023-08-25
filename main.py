@@ -55,11 +55,6 @@ if __name__ == '__main__':
     keyboard.add_hotkey('print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     keyboard.add_hotkey('alt+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
     keyboard.add_hotkey('windows+print screen', executor.add, args=(save_clipboard_by_copy_2_times, ()))
-    keyboard.add_hotkey(
-        'ctrl+_',
-        executor.add,
-        args=(lambda x: ExcelWriter().save(x), ('-------------------------------------------------------------------',))
-    )
 
     # Open or close kb.xlsx
     keyboard.add_hotkey('ctrl+\\', ProcessManager.open, args=(ExcelContext.excel_path,))
@@ -69,6 +64,7 @@ if __name__ == '__main__':
     keyboard.add_hotkey('tab+left', executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
     keyboard.add_hotkey('home', executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
     keyboard.add_hotkey('alt', executor.add, args=(show_column, ()))
+    keyboard.add_hotkey('ctrl+_', lambda x: ExcelWriter().insert_row_sperator(x), args=(1,))
 
     icon = Tray.create()
     threading.Thread(target=icon.run, daemon=True).start()
