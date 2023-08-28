@@ -139,7 +139,6 @@ class ExcelWriter:
                 logging.info(f'try to terminate process for {self._excel_path}')
                 ProcessManager.terminate_by_path(self._excel_path)
                 try:
-
                     self._workbook.save(self._excel_path)
                     MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
                 except Exception as ex:

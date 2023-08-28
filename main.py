@@ -7,7 +7,6 @@ import pyperclip
 from PIL import ImageGrab
 
 from config import ConfigManager
-from excel_context import ExcelContext
 from excel_writer import ExcelWriter
 from process import ProcessManager
 from task_queue import TaskExecutor
@@ -54,15 +53,12 @@ if __name__ == '__main__':
     copy_2_times_short_key = ConfigManager.shortcut('save_clipboard_by_copy')
     if copy_2_times_short_key:
         keyboard.add_hotkey(copy_2_times_short_key, executor.add, args=(save_clipboard_by_copy_2_times, ()))
-
     save_clipboard_short_key = ConfigManager.shortcut('save_clipboard')
     if save_clipboard_short_key:
         keyboard.add_hotkey(save_clipboard_short_key, executor.add, args=(save_clipboard, ()))
-
     print_screen_short_key = ConfigManager.shortcut('print_screen')
     if print_screen_short_key:
         keyboard.add_hotkey(print_screen_short_key, executor.add, args=(save_clipboard_by_copy_2_times, ()))
-
     windows_print_screen_short_key = ConfigManager.shortcut('windows_print_screen')
     if windows_print_screen_short_key:
         keyboard.add_hotkey(windows_print_screen_short_key, executor.add, args=(save_clipboard_by_copy_2_times, ()))
