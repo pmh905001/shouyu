@@ -6,7 +6,7 @@ import pystray
 from PIL import Image
 from pystray import MenuItem
 
-from excel_context import ExcelContext
+from config import ConfigManager
 from process import ProcessManager
 
 
@@ -38,7 +38,7 @@ class Tray:
 
     @classmethod
     def on_show(cls, icon, item):
-        ProcessManager.open(ExcelContext.excel_path)
+        ProcessManager.open(ConfigManager.excel_path())
 
 
 if __name__ == '__main__':

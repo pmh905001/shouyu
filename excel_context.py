@@ -1,10 +1,7 @@
-import logging
-
 from config import ConfigManager
 
 
 class ExcelContext:
-    excel_path = ConfigManager.get('excel_path', 'kb.xlsx')
     steps = 0
     row_steps = 0
 

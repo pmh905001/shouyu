@@ -12,6 +12,7 @@ from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from config import ConfigManager
 from excel_context import ExcelContext
 from msg_box import MessageBox, MessageType
 from process import ProcessManager
@@ -19,7 +20,7 @@ from process import ProcessManager
 
 class ExcelWriter:
 
-    def __init__(self, excel_path=ExcelContext.excel_path):
+    def __init__(self, excel_path=ConfigManager.excel_path()):
         self._excel_path = excel_path
         self._worksheet_name = time.strftime('%Y-%m-%d')
         self._workbook: Workbook = self._load_workbook()
