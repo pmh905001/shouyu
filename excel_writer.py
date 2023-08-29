@@ -120,6 +120,7 @@ class ExcelWriter:
 
     def save(self, data: PILImage or str, ignore_permission_error: bool = False):
         msg = None
+        duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
         try:
             if data is not None:
                 anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset(),
@@ -130,7 +131,7 @@ class ExcelWriter:
                     self._save_text(data, anchor)
                 msg = f'{anchor}: {str(data)}'
                 self._workbook.save(self._excel_path)
-                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
+                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
                 # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')
@@ -140,18 +141,18 @@ class ExcelWriter:
                 ProcessManager.terminate_by_path(self._excel_path)
                 try:
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
                 except Exception as ex:
                     logging.exception(f'failed to save "{data}"')
-                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
+                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration)
 
                 ProcessManager.open(self._excel_path)
             else:
                 logging.exception(f'failed to save "{data}"')
-                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR)
+                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration)
         except Exception as ex:
             logging.exception(f'failed to save "{data}"')
-            MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR)
+            MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration)
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
@@ -169,7 +170,7 @@ class ExcelWriter:
             self._generate_move_message(column_index, ExcelContext.steps),
             f'{anchor_or_image[0]}: {"Image" if anchor_or_image[1] is Image else anchor_or_image[1]}',
             MessageType.SUCCESS,
-            2
+            duration = ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
 
     def insert_row_sperator(self, step=0):
@@ -186,7 +187,7 @@ class ExcelWriter:
             'Move',
             self._generate_move_message(column_index, ExcelContext.steps),
             MessageType.SUCCESS,
-            2
+            duration = ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
 
     @staticmethod

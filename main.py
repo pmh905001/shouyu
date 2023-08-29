@@ -78,7 +78,7 @@ if __name__ == '__main__':
     move_to_left_short_key = ConfigManager.shortcut('move_to_left')
     if move_to_left_short_key:
         keyboard.add_hotkey(move_to_left_short_key, executor.add, args=(lambda x: ExcelWriter().move_column(x), (-1,)))
-    home_short_key = ConfigManager.shortcut('move_to_left')
+    home_short_key = ConfigManager.shortcut('home')
     if home_short_key:
         keyboard.add_hotkey(home_short_key, executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
     show_status_short_key = ConfigManager.shortcut('show_status')
