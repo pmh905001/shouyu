@@ -38,7 +38,7 @@ def show_column():
     global last_show_time
     current_time = time.time()
     if current_time - last_show_time < 3:
-        ExcelWriter().move_column(0)
+        ExcelWriter().move_column()
     else:
         last_show_time = current_time
 

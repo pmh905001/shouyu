@@ -122,7 +122,7 @@ class ExcelWriter:
         msg = None
         duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
         try:
-            if data is not None:
+            if data:
                 anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset(),
                                            ExcelContext.get_row_steps_and_reset())
                 if isinstance(data, PILImage):
