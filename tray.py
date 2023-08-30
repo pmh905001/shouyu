@@ -1,6 +1,4 @@
-import os
-import sys
-
+import keyboard
 import psutil
 import pystray
 from PIL import Image
@@ -17,6 +15,7 @@ class Tray:
     @classmethod
     def create(cls):
         menu = (
+            MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='退出', action=cls.on_exit),
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
         )
@@ -29,6 +28,12 @@ class Tray:
         icon.stop()
         # sys.exit() can stop tray only, but the keyboard is still running.
         psutil.Process().terminate()
+
+    @classmethod
+    def on_restart(cls, icon, item):
+        keyboard.remove_all_hotkeys()
+        from shortcut import Shortcut
+        Shortcut.register_hot_keys()
 
     @classmethod
     def on_show(cls, icon, item):
