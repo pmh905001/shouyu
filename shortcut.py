@@ -39,6 +39,11 @@ class Shortcut:
         else:
             cls.last_copy_time = current_time
 
+
+    @classmethod
+    def one_key_save(cls):
+        print('one key save!')
+
     @classmethod
     def show_column(cls):
         current_time = time.time()
@@ -50,6 +55,10 @@ class Shortcut:
     @classmethod
     def register_hot_keys(cls):
         # save clipboard to kb.xlsx
+        one_key_save_short_key = ConfigManager.shortcut('one_key_save')
+        if one_key_save_short_key:
+            keyboard.add_hotkey(one_key_save_short_key, cls.executor.add, args=(cls.one_key_save, ()))
+
         copy_2_times_short_key = ConfigManager.shortcut('save_clipboard_by_copy')
         if copy_2_times_short_key:
             keyboard.add_hotkey(copy_2_times_short_key, cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
