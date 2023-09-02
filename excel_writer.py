@@ -168,7 +168,7 @@ class ExcelWriter:
             logging.info(f'move {ExcelContext.steps} steps')
         MessageBox.pop_up_message(
             self._generate_move_message(column_index, ExcelContext.steps),
-            f'{anchor_or_image[0]}: {"Image" if anchor_or_image[1] is Image else anchor_or_image[1]}',
+            f'{get_column_letter(anchor_or_image[0]._from.col+1)}{anchor_or_image[0]._from.row}: {"Image" if anchor_or_image[1] is Image else anchor_or_image[1]}',
             MessageType.SUCCESS,
             duration = ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
