@@ -168,9 +168,9 @@ class ExcelWriter:
             logging.info(f'move {ExcelContext.steps} steps')
         MessageBox.pop_up_message(
             self._generate_move_message(column_index, ExcelContext.steps),
-            f'{get_column_letter(anchor_or_image[0]._from.col+1)}{anchor_or_image[0]._from.row}: {"Image" if anchor_or_image[1] is Image else anchor_or_image[1]}',
+            self._generate_status_message(anchor_or_image),
             MessageType.SUCCESS,
-            duration = ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
+            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
 
     def insert_row_sperator(self, step=0):
@@ -187,7 +187,7 @@ class ExcelWriter:
             'Move',
             self._generate_move_message(column_index, ExcelContext.steps),
             MessageType.SUCCESS,
-            duration = ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
+            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
 
     @staticmethod
@@ -200,3 +200,11 @@ class ExcelWriter:
             return from_column
         else:
             return f'Move {to_column} <- {from_column}'
+
+    @staticmethod
+    def _generate_status_message(anchor_or_image):
+        if isinstance(anchor_or_image[1], Image):
+            anchor = anchor_or_image[0]._from
+            return f'{get_column_letter(anchor.col + 1) + str(anchor.row)}: Image'
+        else:
+            return f'{anchor_or_image[0]}:{anchor_or_image[1]}'
