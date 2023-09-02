@@ -6,11 +6,12 @@ import keyboard
 import pyperclip
 from PIL import ImageGrab
 
+from collector.chrome import ChromeCollector
 from config import ConfigManager
 from excel_writer import ExcelWriter
 from process import ProcessManager
 from task_queue import TaskExecutor
-from tray import Tray
+from collector.basic_collector import BasicCollector
 
 
 class Shortcut:
@@ -39,10 +40,18 @@ class Shortcut:
         else:
             cls.last_copy_time = current_time
 
+    @classmethod
+    def generate_collector(cls):
+        if BasicCollector.get_process_name() == 'chrome.exe':
+            return ChromeCollector()
+        else:
+            return BasicCollector()
 
     @classmethod
     def one_key_save(cls):
-        print('one key save!')
+        collector = cls.generate_collector()
+        for record in collector.collect_records():
+            ExcelWriter().save(record)
 
     @classmethod
     def show_column(cls):
