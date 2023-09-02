@@ -8,6 +8,7 @@ from PIL import ImageGrab
 
 from collector.chrome import ChromeCollector
 from config import ConfigManager
+from excel_context import ExcelContext
 from excel_writer import ExcelWriter
 from process import ProcessManager
 from task_queue import TaskExecutor
@@ -50,8 +51,12 @@ class Shortcut:
     @classmethod
     def one_key_save(cls):
         collector = cls.generate_collector()
-        for record in collector.collect_records():
+        records = collector.collect_records()
+        for index, record in enumerate(records):
+            if index == 1:
+                ExcelContext.steps = 1
             ExcelWriter().save(record)
+        ExcelContext.steps = -1
 
     @classmethod
     def show_column(cls):

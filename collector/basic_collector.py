@@ -14,8 +14,7 @@ class BasicCollector:
         threadId, processId = win32process.GetWindowThreadProcessId(hwnd)
         return psutil.Process(processId).name()
 
-    @staticmethod
-    def get_title():
+    def get_title(self):
         hwnd = win32gui.GetForegroundWindow()
         title = win32gui.GetWindowText(hwnd)
         return title
