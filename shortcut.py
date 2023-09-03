@@ -84,8 +84,18 @@ class Shortcut:
             keyboard.add_hotkey(print_screen_short_key, cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
         windows_print_screen_short_key = ConfigManager.shortcut('windows_print_screen')
         if windows_print_screen_short_key:
-            keyboard.add_hotkey(windows_print_screen_short_key, cls.executor.add,
-                                args=(cls.save_clipboard_by_copy_2_times, ()))
+            keyboard.add_hotkey(
+                windows_print_screen_short_key,
+                cls.executor.add,
+                args=(cls.save_clipboard_by_copy_2_times, ())
+            )
+        alt_print_screen_short_key = ConfigManager.shortcut('alt_print_screen')
+        if alt_print_screen_short_key:
+            keyboard.add_hotkey(
+                alt_print_screen_short_key,
+                cls.executor.add,
+                args=(cls.save_clipboard_by_copy_2_times, ())
+            )
         # Open or close kb.xlsx
         open_excel_short_key = ConfigManager.shortcut('open_excel')
         if open_excel_short_key:
