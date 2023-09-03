@@ -1,6 +1,8 @@
-import keyboard
+import os
+
 import psutil
 import pystray
+import sys
 from PIL import Image
 from pystray import MenuItem
 
@@ -31,9 +33,8 @@ class Tray:
 
     @classmethod
     def on_restart(cls, icon, item):
-        keyboard.remove_all_hotkeys()
-        from shortcut import Shortcut
-        Shortcut.register_hot_keys()
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
 
     @classmethod
     def on_show(cls, icon, item):
