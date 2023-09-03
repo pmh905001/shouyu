@@ -108,7 +108,7 @@ class Shortcut:
             keyboard.add_hotkey(home_short_key, cls.executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
         show_status_short_key = ConfigManager.shortcut('show_status')
         if show_status_short_key:
-            keyboard.add_hotkey(show_status_short_key, cls.executor.add, args=(cls.show_column, ()))
+            keyboard.add_hotkey(show_status_short_key, cls.show_column)
         insert_row_separator_short_key = ConfigManager.shortcut('insert_row_separator')
         if insert_row_separator_short_key:
             keyboard.add_hotkey(insert_row_separator_short_key, lambda x: ExcelWriter().insert_row_sperator(x),
