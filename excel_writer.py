@@ -118,7 +118,7 @@ class ExcelWriter:
         self._active_worksheet[anchor] = txt
         logging.info(f'saved text: {txt}!')
 
-    def save(self, data: PILImage or str, ignore_permission_error: bool = False):
+    def save(self, data: PILImage or str, ignore_permission_error: bool = False, open_excel_again=True):
         msg = None
         duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
         try:
@@ -145,8 +145,8 @@ class ExcelWriter:
                 except Exception as ex:
                     logging.exception(f'failed to save "{data}"')
                     MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration)
-
-                ProcessManager.open(self._excel_path)
+                if open_excel_again:
+                    ProcessManager.open(self._excel_path)
             else:
                 logging.exception(f'failed to save "{data}"')
                 MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration)

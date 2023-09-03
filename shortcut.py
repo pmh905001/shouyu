@@ -55,7 +55,7 @@ class Shortcut:
         for index, record in enumerate(records):
             if index == 1:
                 ExcelContext.steps = 1
-            ExcelWriter().save(record)
+            ExcelWriter().save(record, open_excel_again=False)
         ExcelContext.steps = -1
 
     @classmethod
