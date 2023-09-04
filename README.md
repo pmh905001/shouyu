@@ -1,5 +1,5 @@
 # shouyu
-Quickly record the clipboard to MS/WPS Excel file by using shortcut keys quickly. Suitable for users whose record habits and currently only support Windows users.
+Quickly record the content (text & image)of clipboard to MS/WPS Excel file by using shortcut keys. Suitable for users whose record habits and currently only support Windows users.
 Please refer to kb.ini to set/change excel path and shortcuts.
 
 
