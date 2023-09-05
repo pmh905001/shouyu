@@ -1,6 +1,6 @@
 # shouyu
 Quickly record the content (text & image)of clipboard to MS/WPS Excel file by using shortcut keys. Suitable for users whose record habits and currently only support Windows users.
-Please refer to kb.ini to set/change excel path and shortcuts.
+Please refer to [kb.ini](kb.ini) to set/change excel path and shortcuts.
 
 
 # Cases
@@ -12,3 +12,7 @@ Please refer to kb.ini to set/change excel path and shortcuts.
 - <img src="resources/screenshort/ui.png" alt="excel UI" title="Excel UI">
 - <img src="resources/screenshort/bubble_msg_box.png" alt="Bubble message box" title="Bubble message box">
 - <img src="resources/screenshort/tray.png" alt="Tray" title="Tray">
+
+
+
+- 
