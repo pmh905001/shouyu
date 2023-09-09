@@ -127,11 +127,16 @@ class ExcelWriter:
                                            ExcelContext.get_row_steps_and_reset())
                 if isinstance(data, PILImage):
                     self._save_image(data, anchor)
+                    msg = f'{anchor}: Image'
+                    self._workbook.save(self._excel_path)
+                    MessageBox.pop_up_message(
+                        'Success', msg, MessageType.SUCCESS, duration, 'D:\\daily-tasks\\github\\shouyu\\temp.png'
+                    )
                 else:
                     self._save_text(data, anchor)
-                msg = f'{anchor}: {str(data)}'
-                self._workbook.save(self._excel_path)
-                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
+                    msg = f'{anchor}: {str(data)}'
+                    self._workbook.save(self._excel_path)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
                 # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')

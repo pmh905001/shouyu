@@ -46,15 +46,20 @@ class MessageBox:
         return 0
 
     @classmethod
-    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5):
-        msg_box = MessageBox()
-        msg_box.showMsg(title, msg, level)
-        time.sleep(duration)
-        win32gui.DestroyWindow(msg_box.hwnd)
+    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5, image_path=None):
+        if image_path:
+            from win11toast import toast
+            toast(title, msg, image=image_path)
+        else:
+            msg_box = MessageBox()
+            msg_box.showMsg(title, msg, level)
+            time.sleep(duration)
+            win32gui.DestroyWindow(msg_box.hwnd)
 
 
 if __name__ == '__main__':
-    MessageBox.pop_up_message("Failed", "test", MessageType.ERROR)
-    MessageBox.pop_up_message("Failed2", "test2", MessageType.ERROR)
-    MessageBox.pop_up_message("Failed3", "test3", MessageType.ERROR)
-    MessageBox.pop_up_message("Failed4", "test4", MessageType.SUCCESS)
+    # MessageBox.pop_up_message("Failed", "test", MessageType.ERROR)
+    # MessageBox.pop_up_message("Failed2", "test2", MessageType.ERROR)
+    # MessageBox.pop_up_message("Failed3", "test3", MessageType.ERROR)
+    # MessageBox.pop_up_message("Failed4", "test4", MessageType.SUCCESS)
+    ...
