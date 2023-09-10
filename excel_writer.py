@@ -111,7 +111,7 @@ class ExcelWriter:
 
     def _save_image(self, img: PILImage, anchor: str):
         img.save(self.IMAGE_PATH)
-        self._active_worksheet.add_image(Image(tmp_img), anchor)
+        self._active_worksheet.add_image(Image(self.IMAGE_PATH), anchor)
         logging.info('saved image!')
 
     def _save_text(self, txt: str, anchor: str):
@@ -121,17 +121,19 @@ class ExcelWriter:
     def save(self, data: PILImage or str, ignore_permission_error: bool = False, open_excel_again=True):
         msg = None
         duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
+        image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
         try:
             if data:
-                anchor = self._next_anchor(self._active_worksheet, ExcelContext.get_steps_and_reset(),
-                                           ExcelContext.get_row_steps_and_reset())
+                anchor = self._next_anchor(
+                    self._active_worksheet,
+                    ExcelContext.get_steps_and_reset(),
+                    ExcelContext.get_row_steps_and_reset()
+                )
                 if isinstance(data, PILImage):
                     self._save_image(data, anchor)
                     msg = f'{anchor}: Image'
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message(
-                        'Success', msg, MessageType.SUCCESS, duration, os.path.abspath(self.IMAGE_PATH)
-                    )
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
                 else:
                     self._save_text(data, anchor)
                     msg = f'{anchor}: {str(data)}'
@@ -146,18 +148,18 @@ class ExcelWriter:
                 ProcessManager.terminate_by_path(self._excel_path)
                 try:
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
                 except Exception as ex:
                     logging.exception(f'failed to save "{data}"')
-                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration)
+                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
                 if open_excel_again:
                     ProcessManager.open(self._excel_path)
             else:
                 logging.exception(f'failed to save "{data}"')
-                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration)
+                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration, image_path)
         except Exception as ex:
             logging.exception(f'failed to save "{data}"')
-            MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration)
+            MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
@@ -175,7 +177,8 @@ class ExcelWriter:
             self._generate_move_message(column_index, ExcelContext.steps),
             self._generate_status_message(anchor_or_image),
             MessageType.SUCCESS,
-            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
+            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x)),
+            image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
         )
 
     def insert_row_sperator(self, step=0):

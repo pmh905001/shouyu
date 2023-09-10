@@ -1,8 +1,9 @@
 from enum import Enum
 
-import win32gui
-import win32con
 import time
+import win32con
+import win32gui
+from win11toast import toast
 
 
 class MessageType(Enum):
@@ -48,13 +49,13 @@ class MessageBox:
     @classmethod
     def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5, image_path=None):
         if image_path:
-            from win11toast import toast
-            toast(title, msg, image=image_path)
+            toast(title, msg, image=image_path, duration='short')
         else:
-            msg_box = MessageBox()
-            msg_box.showMsg(title, msg, level)
-            time.sleep(duration)
-            win32gui.DestroyWindow(msg_box.hwnd)
+            # msg_box = MessageBox()
+            # msg_box.showMsg(title, msg, level)
+            # time.sleep(duration)
+            # win32gui.DestroyWindow(msg_box.hwnd)
+            toast(title, msg, duration='short')
 
 
 if __name__ == '__main__':
