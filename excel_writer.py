@@ -19,6 +19,7 @@ from process import ProcessManager
 
 
 class ExcelWriter:
+    IMAGE_PATH = 'temp.png'
 
     def __init__(self, excel_path=ConfigManager.excel_path()):
         self._excel_path = excel_path
@@ -109,8 +110,7 @@ class ExcelWriter:
         return 1
 
     def _save_image(self, img: PILImage, anchor: str):
-        tmp_img = 'temp.png'
-        img.save(tmp_img)
+        img.save(self.IMAGE_PATH)
         self._active_worksheet.add_image(Image(tmp_img), anchor)
         logging.info('saved image!')
 
@@ -130,7 +130,7 @@ class ExcelWriter:
                     msg = f'{anchor}: Image'
                     self._workbook.save(self._excel_path)
                     MessageBox.pop_up_message(
-                        'Success', msg, MessageType.SUCCESS, duration, 'D:\\daily-tasks\\github\\shouyu\\temp.png'
+                        'Success', msg, MessageType.SUCCESS, duration, os.path.abspath(self.IMAGE_PATH)
                     )
                 else:
                     self._save_text(data, anchor)
