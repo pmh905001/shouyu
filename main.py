@@ -1,3 +1,4 @@
+import logging
 import threading
 
 import keyboard
@@ -8,7 +9,7 @@ from tray import Tray
 
 if __name__ == '__main__':
     setup_log()
-
+    logging.error('Started shouyu service!')
     tray = Tray.create()
     threading.Thread(target=tray.run, daemon=True).start()
 

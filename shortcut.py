@@ -60,6 +60,7 @@ class Shortcut:
 
     @classmethod
     def show_column(cls):
+        logging.info("show column")
         current_time = time.time()
         if current_time - cls.last_show_time < 3:
             ExcelWriter().move_column()

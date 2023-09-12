@@ -25,6 +25,7 @@ class ExcelWriter:
         self._excel_path = excel_path
         self._worksheet_name = time.strftime('%Y-%m-%d')
         self._workbook: Workbook = self._load_workbook()
+        self._changed = False
 
     def _load_workbook(self) -> Workbook:
         if not os.path.exists(self._excel_path):
@@ -37,6 +38,8 @@ class ExcelWriter:
     def _active_worksheet(self) -> Worksheet:
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
+            worksheet['A1'] = 'plan'
+            self._changed = True
             self._workbook.active = worksheet
         else:
             worksheet: Worksheet = self._workbook.get_sheet_by_name(self._worksheet_name)
@@ -171,8 +174,8 @@ class ExcelWriter:
         if column_index + ExcelContext.steps > 16384:
             ExcelContext.steps = 16384 - column_index
 
-        if ExcelContext.steps:
-            logging.info(f'move {ExcelContext.steps} steps')
+        # if ExcelContext.steps:
+        logging.info(f'move {ExcelContext.steps} steps')
         MessageBox.pop_up_message(
             self._generate_move_message(column_index, ExcelContext.steps),
             self._generate_status_message(anchor_or_image),
@@ -180,6 +183,9 @@ class ExcelWriter:
             duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x)),
             image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
         )
+
+        if self._changed:
+            self._workbook.save(self._excel_path)
 
     def insert_row_sperator(self, step=0):
         ExcelContext.row_steps += step
@@ -197,6 +203,9 @@ class ExcelWriter:
             MessageType.SUCCESS,
             duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
+
+        if self._changed:
+            self._workbook.save(self._excel_path)
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):

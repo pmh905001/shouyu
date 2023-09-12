@@ -1,3 +1,5 @@
+import logging
+import os
 from enum import Enum
 
 import time
@@ -48,14 +50,12 @@ class MessageBox:
 
     @classmethod
     def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5, image_path=None):
-        if image_path:
-            toast(title, msg, image=image_path, duration='short')
-        else:
-            # msg_box = MessageBox()
-            # msg_box.showMsg(title, msg, level)
-            # time.sleep(duration)
-            # win32gui.DestroyWindow(msg_box.hwnd)
-            toast(title, msg, duration='short')
+        # msg_box = MessageBox()
+        # msg_box.showMsg(title, msg, level)
+        # time.sleep(duration)
+        # win32gui.DestroyWindow(msg_box.hwnd)
+        logging.error("pop up message!")
+        toast(title, msg, image=image_path, duration='short', audio={'silent': 'true'})
 
 
 if __name__ == '__main__':
@@ -63,4 +63,8 @@ if __name__ == '__main__':
     # MessageBox.pop_up_message("Failed2", "test2", MessageType.ERROR)
     # MessageBox.pop_up_message("Failed3", "test3", MessageType.ERROR)
     # MessageBox.pop_up_message("Failed4", "test4", MessageType.SUCCESS)
-    ...
+    from excel_writer import ExcelWriter
+
+    MessageBox.pop_up_message(
+        "Failed4", "test4", MessageType.SUCCESS, image_path=os.path.abspath(ExcelWriter.IMAGE_PATH)
+    )
