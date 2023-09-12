@@ -129,7 +129,7 @@ class ExcelWriter:
             if data:
                 anchor = self._next_anchor(
                     self._active_worksheet,
-                    ExcelContext.get_steps_and_reset(),
+                    ExcelContext.get_column_steps_and_reset(),
                     ExcelContext.get_row_steps_and_reset()
                 )
                 if isinstance(data, PILImage):

@@ -6,7 +6,7 @@ class ExcelContext:
     row_steps = 0
 
     @classmethod
-    def get_steps_and_reset(cls):
+    def get_column_steps_and_reset(cls):
         tmp = cls.steps
         cls.steps = 0
         return tmp
