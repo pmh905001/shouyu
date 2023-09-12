@@ -54,7 +54,7 @@ class MessageBox:
         # msg_box.showMsg(title, msg, level)
         # time.sleep(duration)
         # win32gui.DestroyWindow(msg_box.hwnd)
-        logging.error("pop up message!")
+        logging.info("pop up message!")
         toast(title, msg, image=image_path, duration='short', audio={'silent': 'true'})
 
 
