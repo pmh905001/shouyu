@@ -1,3 +1,4 @@
+import logging
 import os
 
 import psutil
@@ -30,6 +31,7 @@ class Tray:
         icon.stop()
         # sys.exit() can stop tray only, but the keyboard is still running.
         psutil.Process().terminate()
+        logging.info('Stopped shouyu service!')
 
     @classmethod
     def on_restart(cls, icon, item):
