@@ -1,10 +1,14 @@
 pyperclip==1.8.0
 keyboard==0.13.5
 openpyxl==3.1.0
+# on python3.10, need to upgrade to 10.0.0
 Pillow>=8.4.0
 psutil==5.7.0
 pystray==0.19.4
 pytest==7.0.1
 pywin32==305
-PyInstaller==3.6
+# on python3.10, need to upgrade to 5.13.2
+PyInstaller>=3.6
 PyAutoGUI==0.9.54
+# python>=3.8,python3.6 is not supported
+win11toast==0.32
