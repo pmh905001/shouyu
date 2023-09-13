@@ -55,16 +55,23 @@ class MessageBox:
         # time.sleep(duration)
         # win32gui.DestroyWindow(msg_box.hwnd)
         logging.info("pop up message!")
-        toast(title, msg, image=image_path, duration='short', audio={'silent': 'true'})
+        toast(
+            title,
+            msg,
+            image=image_path,
+            duration='short',
+            audio={'silent': 'true'},
+            icon=os.path.abspath(
+                f'.\\resources\\icon\\{"success.png" if level == MessageType.SUCCESS else "failed.png"}'
+            )
+        )
 
 
 if __name__ == '__main__':
-    # MessageBox.pop_up_message("Failed", "test", MessageType.ERROR)
-    # MessageBox.pop_up_message("Failed2", "test2", MessageType.ERROR)
-    # MessageBox.pop_up_message("Failed3", "test3", MessageType.ERROR)
-    # MessageBox.pop_up_message("Failed4", "test4", MessageType.SUCCESS)
-    from excel_writer import ExcelWriter
+    MessageBox.pop_up_message("Failed", "test", MessageType.ERROR)
+    MessageBox.pop_up_message("Success", "test", MessageType.SUCCESS)
 
+    from excel_writer import ExcelWriter
     MessageBox.pop_up_message(
         "Failed4", "test4", MessageType.SUCCESS, image_path=os.path.abspath(ExcelWriter.IMAGE_PATH)
     )
