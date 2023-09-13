@@ -9,10 +9,9 @@ Please refer to [kb.ini](kb.ini) to set/change excel path and shortcuts.
 
 
 # Features
+
+
 - <img src="resources/screenshort/ui.png" alt="excel UI" title="Excel UI">
 - <img src="resources/screenshort/bubble_msg_box.png" alt="Bubble message box" title="Bubble message box">
+- <img src="resources/screenshort/img_bubble_msg_box.png" alt="Bubble message box for image" title="Bubble message box for image">
 - <img src="resources/screenshort/tray.png" alt="Tray" title="Tray">
-
-
-
-- 
