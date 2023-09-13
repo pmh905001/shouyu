@@ -7,6 +7,8 @@ import win32con
 import win32gui
 from win11toast import toast
 
+from package import Package
+
 
 class MessageType(Enum):
     SUCCESS = 0
@@ -61,8 +63,8 @@ class MessageBox:
             image=image_path,
             duration='short',
             audio={'silent': 'true'},
-            icon=os.path.abspath(
-                f'.\\resources\\icon\\{"success.png" if level == MessageType.SUCCESS else "failed.png"}'
+            icon=os.path.abspath(Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
+
             )
         )
 
@@ -70,8 +72,3 @@ class MessageBox:
 if __name__ == '__main__':
     MessageBox.pop_up_message("Failed", "test", MessageType.ERROR)
     MessageBox.pop_up_message("Success", "test", MessageType.SUCCESS)
-
-    from excel_writer import ExcelWriter
-    MessageBox.pop_up_message(
-        "Failed4", "test4", MessageType.SUCCESS, image_path=os.path.abspath(ExcelWriter.IMAGE_PATH)
-    )
