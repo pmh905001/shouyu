@@ -118,7 +118,13 @@ class ExcelWriter:
         logging.info('saved image!')
 
     def _save_text(self, txt: str, anchor: str):
-        self._active_worksheet[anchor] = txt
+        if ExcelContext.one_cell_mode:
+            self._active_worksheet[anchor] = txt
+        else:
+            col, row = coordinate_from_string(anchor)
+            for line in txt.splitlines():
+                self._active_worksheet[f'{col}{row}'] = line
+                row += 1
         logging.info(f'saved text: {txt}!')
 
     def save(self, data: PILImage or str, ignore_permission_error: bool = False, open_excel_again=True):
@@ -190,6 +196,10 @@ class ExcelWriter:
     def insert_row_sperator(self, step=0):
         ExcelContext.row_steps += step
 
+    def switch_one_or_multiple_cell_mode(self):
+        ExcelContext.one_cell_mode = not ExcelContext.one_cell_mode
+        self.move_column()
+
     def move_to_home(self):
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
         column_index = column_index_from_string(old)
@@ -211,12 +221,13 @@ class ExcelWriter:
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)
         to_column = get_column_letter(column_index + ExcelContext.steps)
+        mode = "" if ExcelContext.one_cell_mode else " & Cross Multiple Rows"
         if steps > 0:
-            return f'Move {from_column} -> {to_column}'
+            return f'Move {from_column} -> {to_column}{mode}'
         elif steps == 0:
-            return from_column
+            return f'{from_column}{mode}'
         else:
-            return f'Move {to_column} <- {from_column}'
+            return f'Move {to_column} <- {from_column}{mode}'
 
     @staticmethod
     def _generate_status_message(anchor_or_image):

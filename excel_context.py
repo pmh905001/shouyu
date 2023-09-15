@@ -4,6 +4,7 @@ from config import ConfigManager
 class ExcelContext:
     steps = 0
     row_steps = 0
+    one_cell_mode = True
 
     @classmethod
     def get_column_steps_and_reset(cls):

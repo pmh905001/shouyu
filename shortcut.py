@@ -124,3 +124,9 @@ class Shortcut:
         if insert_row_separator_short_key:
             keyboard.add_hotkey(insert_row_separator_short_key, lambda x: ExcelWriter().insert_row_sperator(x),
                                 args=(1,))
+
+        one_or_multiple_cells_mode_short_key = ConfigManager.shortcut('one_or_multiple_cells_mode')
+        if one_or_multiple_cells_mode_short_key:
+            keyboard.add_hotkey(
+                one_or_multiple_cells_mode_short_key, lambda: ExcelWriter().switch_one_or_multiple_cell_mode()
+            )

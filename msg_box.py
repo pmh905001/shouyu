@@ -63,9 +63,10 @@ class MessageBox:
             image=image_path,
             duration='short',
             audio={'silent': 'true'},
-            icon=os.path.abspath(Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
+            icon=os.path.abspath(
+                Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
 
-            )
+                )
         )
 
 
