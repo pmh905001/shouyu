@@ -217,6 +217,10 @@ class ExcelWriter:
         if self._changed:
             self._workbook.save(self._excel_path)
 
+    def reset_column(self):
+        ExcelContext.steps = 0
+        self.move_column()
+
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)

@@ -118,6 +118,12 @@ class Shortcut:
         if home_short_key:
             keyboard.add_hotkey(home_short_key, cls.executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
         show_status_short_key = ConfigManager.shortcut('show_status')
+
+        reset_column_short_key = ConfigManager.shortcut('reset_column')
+        if reset_column_short_key:
+            keyboard.add_hotkey(reset_column_short_key, cls.executor.add, args=(lambda: ExcelWriter().reset_column(), ()))
+        show_status_short_key = ConfigManager.shortcut('show_status')
+
         if show_status_short_key:
             keyboard.add_hotkey(show_status_short_key, cls.show_column)
         insert_row_separator_short_key = ConfigManager.shortcut('insert_row_separator')
