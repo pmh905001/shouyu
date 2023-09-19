@@ -195,6 +195,7 @@ class ExcelWriter:
 
     def insert_row_sperator(self, step=0):
         ExcelContext.row_steps += step
+        self.move_column()
 
     def switch_one_or_multiple_cell_mode(self):
         ExcelContext.one_cell_mode = not ExcelContext.one_cell_mode
@@ -225,13 +226,14 @@ class ExcelWriter:
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)
         to_column = get_column_letter(column_index + ExcelContext.steps)
-        mode = "" if ExcelContext.one_cell_mode else " & Cross Multiple Rows"
+        mode = '' if ExcelContext.one_cell_mode else ' & Cross Multiple Rows'
+        to_row = '' if ExcelContext.row_steps == 0 else f' & Jump {ExcelContext.row_steps} Rows'
         if steps > 0:
-            return f'Move {from_column} -> {to_column}{mode}'
+            return f'Move {from_column} -> {to_column}{to_row}{mode}'
         elif steps == 0:
-            return f'{from_column}{mode}'
+            return f'{from_column}{to_row}{mode}'
         else:
-            return f'Move {to_column} <- {from_column}{mode}'
+            return f'Move {to_column} <- {from_column}{to_row}{mode}'
 
     @staticmethod
     def _generate_status_message(anchor_or_image):
