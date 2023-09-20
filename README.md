@@ -13,4 +13,3 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 - <img src="resources/screenshort/bubble_msg_box.png" alt="Bubble message box" title="Bubble message box">
 - <img src="resources/screenshort/img_bubble_msg_box.png" alt="Bubble message box for image" title="Bubble message box for image">
 - <img src="resources/screenshort/tray.png" alt="Tray" title="Tray">
-- <iframe name="kb.ini" src="kb.ini" width="100%" height="500"></iframe>
