@@ -13,7 +13,7 @@ from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from shouyu.config import ConfigManager
-from shouyu.excel_context import ExcelContext
+from shouyu.context import ExcelContext
 from shouyu.msg_box import MessageBox, MessageType
 from shouyu.process import ProcessManager
 
