@@ -68,6 +68,11 @@ class Shortcut:
             cls.last_show_time = current_time
 
     @classmethod
+    def clear_pressed_events(cls):
+        with keyboard._pressed_events_lock:
+            keyboard._pressed_events.clear()
+
+    @classmethod
     def register_hot_keys(cls):
         # save clipboard to kb.xlsx
         one_key_save_short_key = ConfigManager.shortcut('one_key_save')
@@ -121,7 +126,8 @@ class Shortcut:
 
         reset_column_short_key = ConfigManager.shortcut('reset_column')
         if reset_column_short_key:
-            keyboard.add_hotkey(reset_column_short_key, cls.executor.add, args=(lambda: ExcelWriter().reset_column(), ()))
+            keyboard.add_hotkey(reset_column_short_key, cls.executor.add,
+                                args=(lambda: ExcelWriter().reset_column(), ()))
         show_status_short_key = ConfigManager.shortcut('show_status')
 
         if show_status_short_key:
@@ -136,3 +142,5 @@ class Shortcut:
             keyboard.add_hotkey(
                 one_or_multiple_cells_mode_short_key, lambda: ExcelWriter().switch_one_or_multiple_cell_mode()
             )
+
+        keyboard.add_hotkey("windows+l", cls.clear_pressed_events)
