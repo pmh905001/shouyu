@@ -9,7 +9,7 @@ from PIL import ImageGrab
 from collector.chrome import ChromeCollector
 from config import ConfigManager
 from excel_context import ExcelContext
-from excel_writer import KbExcel
+from excel import KbExcel
 from exception_handler import exception_handler
 from process import ProcessManager
 from task_queue import TaskExecutor
