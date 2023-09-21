@@ -1,11 +1,9 @@
 import logging
 import os
-import time
-
 import psutil
-from psutil import AccessDenied
-
 import threading
+import time
+from psutil import AccessDenied
 
 
 class ProcessManager:

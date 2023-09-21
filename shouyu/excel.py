@@ -1,16 +1,15 @@
 import logging
 import math
+import openpyxl
 import os
 import time
-from typing import Union
-
-import openpyxl
 from PIL.Image import Image as PILImage
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from typing import Union
 
 from shouyu.config import ConfigManager
 from shouyu.context import ExcelContext

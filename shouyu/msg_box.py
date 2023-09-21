@@ -1,10 +1,9 @@
 import logging
 import os
-from enum import Enum
-
 import time
 import win32con
 import win32gui
+from enum import Enum
 from win11toast import toast
 
 from shouyu.package import Package

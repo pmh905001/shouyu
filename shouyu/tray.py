@@ -1,6 +1,5 @@
 import logging
 import os
-
 import psutil
 import pystray
 import sys

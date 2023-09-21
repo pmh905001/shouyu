@@ -1,6 +1,5 @@
-import os
-
 import iniconfig
+import os
 
 from shouyu.package import Package
 
