@@ -2,7 +2,7 @@ import os
 
 import iniconfig
 
-from package import Package
+from shouyu.package import Package
 
 
 class ConfigManager:

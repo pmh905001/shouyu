@@ -7,12 +7,12 @@ import pyperclip
 from PIL import ImageGrab
 
 from collector.chrome import ChromeCollector
-from config import ConfigManager
-from excel_context import ExcelContext
-from excel import KbExcel
-from exception_handler import exception_handler
-from process import ProcessManager
-from task_queue import TaskExecutor
+from shouyu.config import ConfigManager
+from shouyu.excel_context import ExcelContext
+from shouyu.excel import KbExcel
+from shouyu.exception_handler import exception_handler
+from shouyu.process import ProcessManager
+from shouyu.task_queue import TaskExecutor
 from collector.basic_collector import BasicCollector
 
 

@@ -12,14 +12,14 @@ from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from config import ConfigManager
-from excel_context import ExcelContext
-from msg_box import MessageBox, MessageType
-from process import ProcessManager
+from shouyu.config import ConfigManager
+from shouyu.excel_context import ExcelContext
+from shouyu.msg_box import MessageBox, MessageType
+from shouyu.process import ProcessManager
 
 
 class KbExcel:
-    IMAGE_PATH = 'temp.png'
+    IMAGE_PATH = '../temp.png'
 
     def __init__(self, excel_path=ConfigManager.excel_path()):
         self._excel_path = excel_path

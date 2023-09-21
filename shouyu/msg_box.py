@@ -7,7 +7,7 @@ import win32con
 import win32gui
 from win11toast import toast
 
-from package import Package
+from shouyu.package import Package
 
 
 class MessageType(Enum):
@@ -64,7 +64,7 @@ class MessageBox:
             duration='short',
             audio={'silent': 'true'},
             icon=os.path.abspath(
-                Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
+                Package.get_resource_path(f'shouyu\\{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
 
                 )
         )

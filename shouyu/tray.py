@@ -7,9 +7,9 @@ import sys
 from PIL import Image
 from pystray import MenuItem
 
-from config import ConfigManager
-from package import Package
-from process import ProcessManager
+from shouyu.config import ConfigManager
+from shouyu.package import Package
+from shouyu.process import ProcessManager
 
 
 class Tray:
@@ -22,7 +22,7 @@ class Tray:
             MenuItem(text='退出', action=cls.on_exit),
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
         )
-        icon = pystray.Icon("name", Image.open(Package.get_resource_path("fish.jpg")), "授渔", menu)
+        icon = pystray.Icon("name", Image.open(Package.get_resource_path("shouyu\\fish.jpg")), "授渔", menu)
         cls._icon = icon
         return icon
 

@@ -50,4 +50,4 @@ class ProcessManager:
 
 
 if __name__ == '__main__':
-    ProcessManager.terminate_by_path('kb.xlsx')
+    ProcessManager.terminate_by_path('../kb.xlsx')

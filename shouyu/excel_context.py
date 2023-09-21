@@ -1,6 +1,3 @@
-from config import ConfigManager
-
-
 class ExcelContext:
     steps = 0
     row_steps = 0

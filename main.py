@@ -3,9 +3,9 @@ import threading
 
 import keyboard
 
-from log import setup_log
-from shortcut import Shortcut
-from tray import Tray
+from shouyu.log import setup_log
+from shouyu.shortcut import Shortcut
+from shouyu.tray import Tray
 
 if __name__ == '__main__':
     setup_log()

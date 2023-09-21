@@ -1,6 +1,6 @@
 import pytest
 
-from excel import KbExcel
+from shouyu.excel import KbExcel
 
 
 @pytest.mark.parametrize(
