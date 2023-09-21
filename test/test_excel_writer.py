@@ -1,6 +1,6 @@
 import pytest
 
-from excel_writer import ExcelWriter
+from excel_writer import KbExcel
 
 
 @pytest.mark.parametrize(
@@ -19,5 +19,5 @@ from excel_writer import ExcelWriter
     ]
 )
 def test_next_anchor(worksheet_name, expect_anchor):
-    writer = ExcelWriter('calculate_next_position.xlsx')
+    writer = KbExcel('calculate_next_position.xlsx')
     assert writer._next_anchor(worksheet_name) == expect_anchor

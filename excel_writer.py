@@ -18,7 +18,7 @@ from msg_box import MessageBox, MessageType
 from process import ProcessManager
 
 
-class ExcelWriter:
+class KbExcel:
     IMAGE_PATH = 'temp.png'
 
     def __init__(self, excel_path=ConfigManager.excel_path()):

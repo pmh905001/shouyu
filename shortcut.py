@@ -9,7 +9,7 @@ from PIL import ImageGrab
 from collector.chrome import ChromeCollector
 from config import ConfigManager
 from excel_context import ExcelContext
-from excel_writer import ExcelWriter
+from excel_writer import KbExcel
 from exception_handler import exception_handler
 from process import ProcessManager
 from task_queue import TaskExecutor
@@ -30,7 +30,7 @@ class Shortcut:
     def save_clipboard():
         img = ImageGrab.grabclipboard()
         copied_text = pyperclip.paste()
-        ExcelWriter().save(img or copied_text)
+        KbExcel().save(img or copied_text)
 
     @classmethod
     @exception_handler
@@ -56,7 +56,7 @@ class Shortcut:
         for index, record in enumerate(records):
             if index == 1:
                 ExcelContext.steps = 1
-            ExcelWriter().save(record, open_excel_again=False)
+            KbExcel().save(record, open_excel_again=False)
         ExcelContext.steps = -1
 
     @classmethod
@@ -65,7 +65,7 @@ class Shortcut:
         logging.info("show column")
         current_time = time.time()
         if current_time - cls.last_show_time < 3:
-            ExcelWriter().move_column()
+            KbExcel().move_column()
         else:
             cls.last_show_time = current_time
 
@@ -117,33 +117,33 @@ class Shortcut:
         move_to_right_short_key = ConfigManager.shortcut('move_to_right')
         if move_to_right_short_key:
             keyboard.add_hotkey(move_to_right_short_key, cls.executor.add,
-                                args=(lambda x: ExcelWriter().move_column(x), (1,)))
+                                args=(lambda x: KbExcel().move_column(x), (1,)))
         move_to_left_short_key = ConfigManager.shortcut('move_to_left')
         if move_to_left_short_key:
             keyboard.add_hotkey(move_to_left_short_key, cls.executor.add,
-                                args=(lambda x: ExcelWriter().move_column(x), (-1,)))
+                                args=(lambda x: KbExcel().move_column(x), (-1,)))
         home_short_key = ConfigManager.shortcut('home')
         if home_short_key:
-            keyboard.add_hotkey(home_short_key, cls.executor.add, args=(lambda: ExcelWriter().move_to_home(), ()))
+            keyboard.add_hotkey(home_short_key, cls.executor.add, args=(lambda: KbExcel().move_to_home(), ()))
         show_status_short_key = ConfigManager.shortcut('show_status')
 
         reset_column_short_key = ConfigManager.shortcut('reset_column')
         if reset_column_short_key:
             keyboard.add_hotkey(reset_column_short_key, cls.executor.add,
-                                args=(lambda: ExcelWriter().reset_column(), ()))
+                                args=(lambda: KbExcel().reset_column(), ()))
         show_status_short_key = ConfigManager.shortcut('show_status')
 
         if show_status_short_key:
             keyboard.add_hotkey(show_status_short_key, cls.show_column)
         insert_row_separator_short_key = ConfigManager.shortcut('insert_row_separator')
         if insert_row_separator_short_key:
-            keyboard.add_hotkey(insert_row_separator_short_key, lambda x: ExcelWriter().insert_row_sperator(x),
+            keyboard.add_hotkey(insert_row_separator_short_key, lambda x: KbExcel().insert_row_sperator(x),
                                 args=(1,))
 
         one_or_multiple_cells_mode_short_key = ConfigManager.shortcut('one_or_multiple_cells_mode')
         if one_or_multiple_cells_mode_short_key:
             keyboard.add_hotkey(
-                one_or_multiple_cells_mode_short_key, lambda: ExcelWriter().switch_one_or_multiple_cell_mode()
+                one_or_multiple_cells_mode_short_key, lambda: KbExcel().switch_one_or_multiple_cell_mode()
             )
 
         keyboard.add_hotkey("windows+l", cls.clear_pressed_events)
