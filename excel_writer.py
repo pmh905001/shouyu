@@ -166,9 +166,6 @@ class ExcelWriter:
             else:
                 logging.exception(f'failed to save "{data}"')
                 MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration, image_path)
-        except Exception as ex:
-            logging.exception(f'failed to save "{data}"')
-            MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)

@@ -10,6 +10,7 @@ from collector.chrome import ChromeCollector
 from config import ConfigManager
 from excel_context import ExcelContext
 from excel_writer import ExcelWriter
+from exception_handler import exception_handler
 from process import ProcessManager
 from task_queue import TaskExecutor
 from collector.basic_collector import BasicCollector
@@ -25,15 +26,14 @@ class Shortcut:
         threading.Thread(target=cls.executor.run, daemon=True).start()
 
     @staticmethod
+    @exception_handler
     def save_clipboard():
-        try:
-            img = ImageGrab.grabclipboard()
-            copied_text = pyperclip.paste()
-            ExcelWriter().save(img or copied_text)
-        except:
-            logging.exception('occurred un-expect exception!')
+        img = ImageGrab.grabclipboard()
+        copied_text = pyperclip.paste()
+        ExcelWriter().save(img or copied_text)
 
     @classmethod
+    @exception_handler
     def save_clipboard_by_copy_2_times(cls):
         current_time = time.time()
         if current_time - cls.last_copy_time < 3:
@@ -42,15 +42,16 @@ class Shortcut:
             cls.last_copy_time = current_time
 
     @classmethod
-    def generate_collector(cls):
+    def _generate_collector(cls):
         if BasicCollector.get_process_name() == 'chrome.exe':
             return ChromeCollector()
         else:
             return BasicCollector()
 
     @classmethod
+    @exception_handler
     def one_key_save(cls):
-        collector = cls.generate_collector()
+        collector = cls._generate_collector()
         records = collector.collect_records()
         for index, record in enumerate(records):
             if index == 1:
@@ -59,6 +60,7 @@ class Shortcut:
         ExcelContext.steps = -1
 
     @classmethod
+    @exception_handler
     def show_column(cls):
         logging.info("show column")
         current_time = time.time()
@@ -68,6 +70,7 @@ class Shortcut:
             cls.last_show_time = current_time
 
     @classmethod
+    @exception_handler
     def clear_pressed_events(cls):
         with keyboard._pressed_events_lock:
             keyboard._pressed_events.clear()
