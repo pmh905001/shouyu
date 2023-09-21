@@ -2,7 +2,7 @@ import pyautogui
 import pyperclip
 import time
 
-from collector.basic_collector import BasicCollector
+from shouyu.collector.basic_collector import BasicCollector
 
 
 class ChromeCollector(BasicCollector):

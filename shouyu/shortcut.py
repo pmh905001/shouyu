@@ -1,19 +1,18 @@
+import keyboard
 import logging
+import pyperclip
 import threading
 import time
-
-import keyboard
-import pyperclip
 from PIL import ImageGrab
 
-from collector.chrome import ChromeCollector
+from shouyu.collector.basic_collector import BasicCollector
+from shouyu.collector.chrome import ChromeCollector
 from shouyu.config import ConfigManager
-from shouyu.excel_context import ExcelContext
 from shouyu.excel import KbExcel
+from shouyu.excel_context import ExcelContext
 from shouyu.exception_handler import exception_handler
 from shouyu.process import ProcessManager
 from shouyu.task_queue import TaskExecutor
-from collector.basic_collector import BasicCollector
 
 
 class Shortcut:
