@@ -124,7 +124,6 @@ class Shortcut:
         home_short_key = ConfigManager.shortcut('home')
         if home_short_key:
             keyboard.add_hotkey(home_short_key, cls.executor.add, args=(lambda: KbExcel().move_to_home(), ()))
-        show_status_short_key = ConfigManager.shortcut('show_status')
 
         reset_column_short_key = ConfigManager.shortcut('reset_column')
         if reset_column_short_key:
@@ -144,5 +143,10 @@ class Shortcut:
             keyboard.add_hotkey(
                 one_or_multiple_cells_mode_short_key, lambda: KbExcel().switch_one_or_multiple_cell_mode()
             )
-
-        keyboard.add_hotkey("windows+l", cls.clear_pressed_events)
+        # HACK: keyboard caught windows+l pressed event when user is locking screen,
+        # but missing the released event.
+        keyboard.add_hotkey('windows+l', cls.clear_pressed_events)
+        keyboard.add_hotkey('windows', cls.clear_pressed_events)
+        # HACK: keyboard caught enter pressed event when user pressed enter to unlocking screen, but missing the
+        # released event.
+        keyboard.add_hotkey('enter', cls.clear_pressed_events)
