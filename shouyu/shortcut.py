@@ -75,6 +75,22 @@ class Shortcut:
             keyboard._pressed_events.clear()
 
     @classmethod
+    def healthcare(cls):
+        while True:
+            with keyboard._pressed_events_lock:
+                # windows or f22 or over 1 minutes
+                if cls.is_key_overtime(keyboard._pressed_events):
+                    keyboard._pressed_events.clear()
+            time.sleep(10)
+
+    @staticmethod
+    def is_key_overtime(pressed_events):
+        for event in pressed_events.values():
+            from time import time as now
+            if now() - event.time > 10:
+                return True
+
+    @classmethod
     def register_hot_keys(cls):
         # save clipboard to kb.xlsx
         one_key_save_short_key = ConfigManager.shortcut('one_key_save')
@@ -146,7 +162,4 @@ class Shortcut:
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)
-        keyboard.add_hotkey('windows', cls.clear_pressed_events)
-        # HACK: keyboard caught enter pressed event when user pressed enter to unlocking screen, but missing the
-        # released event.
-        keyboard.add_hotkey('enter', cls.clear_pressed_events)
+        threading.Thread(target=cls.healthcare, daemon=True).start()
