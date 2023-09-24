@@ -1,3 +1,5 @@
+import time
+
 import psutil
 import pyautogui
 import pyperclip
@@ -24,6 +26,8 @@ class BasicCollector:
         pyperclip.copy("")
         pyautogui.hotkey('ctrl', 'c')
         selected = pyperclip.paste()
+        # wait 50 milliseconds to get selected text from clipboard
+        time.sleep(0.05)
         return selected
 
     def collect_records(self):
