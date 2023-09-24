@@ -168,18 +168,18 @@ class KbExcel:
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
-        ExcelContext.steps += step
+        ExcelContext.column_steps += step
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
         column_index = column_index_from_string(old)
-        if column_index + ExcelContext.steps < 1:
-            ExcelContext.steps = 1 - column_index
-        if column_index + ExcelContext.steps > 16384:
-            ExcelContext.steps = 16384 - column_index
+        if column_index + ExcelContext.column_steps < 1:
+            ExcelContext.column_steps = 1 - column_index
+        if column_index + ExcelContext.column_steps > 16384:
+            ExcelContext.column_steps = 16384 - column_index
 
         # if ExcelContext.steps:
-        logging.info(f'move {ExcelContext.steps} steps')
+        logging.info(f'move {ExcelContext.column_steps} steps')
         MessageBox.pop_up_message(
-            self._generate_move_message(column_index, ExcelContext.steps),
+            self._generate_move_message(column_index, ExcelContext.column_steps),
             self._generate_status_message(anchor_or_image),
             MessageType.SUCCESS,
             duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x)),
@@ -200,13 +200,13 @@ class KbExcel:
     def move_to_home(self):
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
         column_index = column_index_from_string(old)
-        ExcelContext.steps = 1 - column_index
+        ExcelContext.column_steps = 1 - column_index
 
-        if ExcelContext.steps:
-            logging.info(f'move {ExcelContext.steps} steps')
+        if ExcelContext.column_steps:
+            logging.info(f'move {ExcelContext.column_steps} steps')
         MessageBox.pop_up_message(
             'Move',
-            self._generate_move_message(column_index, ExcelContext.steps),
+            self._generate_move_message(column_index, ExcelContext.column_steps),
             MessageType.SUCCESS,
             duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
         )
@@ -215,13 +215,13 @@ class KbExcel:
             self._workbook.save(self._excel_path)
 
     def reset_column(self):
-        ExcelContext.steps = 0
+        ExcelContext.column_steps = 0
         self.move_column()
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)
-        to_column = get_column_letter(column_index + ExcelContext.steps)
+        to_column = get_column_letter(column_index + ExcelContext.column_steps)
         mode = '' if ExcelContext.one_cell_mode else ' & Cross Multiple Rows'
         to_row = '' if ExcelContext.row_steps == 0 else f' & Jump {ExcelContext.row_steps} Rows'
         if steps > 0:

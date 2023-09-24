@@ -54,9 +54,9 @@ class Shortcut:
         records = collector.collect_records()
         for index, record in enumerate(records):
             if index == 1:
-                ExcelContext.steps = 1
+                ExcelContext.column_steps = 1
             KbExcel().save(record, open_excel_again=False)
-        ExcelContext.steps = -1
+        ExcelContext.column_steps = -1
 
     @classmethod
     @exception_handler
