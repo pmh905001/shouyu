@@ -78,13 +78,12 @@ class Shortcut:
     def healthcare(cls):
         while True:
             with keyboard._pressed_events_lock:
-                # windows or f22 or over 1 minutes
-                if cls.is_key_overtime(keyboard._pressed_events):
+                if cls._is_key_overtime(keyboard._pressed_events):
                     keyboard._pressed_events.clear()
             time.sleep(10)
 
     @staticmethod
-    def is_key_overtime(pressed_events):
+    def _is_key_overtime(pressed_events):
         for event in pressed_events.values():
             from time import time as now
             if now() - event.time > 10:
