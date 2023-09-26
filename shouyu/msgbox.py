@@ -16,8 +16,6 @@ class MessageType(Enum):
 
 
 class MessageBox:
-    is_showing_status = False
-
     def __init__(self):
         wc = win32gui.WNDCLASS()
         hinst = wc.hInstance = win32gui.GetModuleHandle(None)
