@@ -1,12 +1,12 @@
 import logging
 import os
 import time
+from enum import Enum
+
 import win32con
 import win32gui
-from enum import Enum
 from win11toast import toast
 
-from shouyu.context import ExcelContext
 from shouyu.package import Package
 
 

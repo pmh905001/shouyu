@@ -92,29 +92,14 @@ class Shortcut:
         if one_key_save_short_key:
             keyboard.add_hotkey(one_key_save_short_key, cls.executor.add, args=(cls.one_key_save, ()))
 
-        copy_2_times_short_key = ConfigManager.shortcut('save_clipboard_by_copy')
-        if copy_2_times_short_key:
-            keyboard.add_hotkey(copy_2_times_short_key, cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
+        keyboard.add_hotkey('ctrl+c', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
+        keyboard.add_hotkey('print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
+        keyboard.add_hotkey('windows+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
+        keyboard.add_hotkey('alt+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
+
         save_clipboard_short_key = ConfigManager.shortcut('save_clipboard')
         if save_clipboard_short_key:
             keyboard.add_hotkey(save_clipboard_short_key, cls.executor.add, args=(cls.save_clipboard, ()))
-        print_screen_short_key = ConfigManager.shortcut('print_screen')
-        if print_screen_short_key:
-            keyboard.add_hotkey(print_screen_short_key, cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-        windows_print_screen_short_key = ConfigManager.shortcut('windows_print_screen')
-        if windows_print_screen_short_key:
-            keyboard.add_hotkey(
-                windows_print_screen_short_key,
-                cls.executor.add,
-                args=(cls.save_clipboard_by_copy_2_times, ())
-            )
-        alt_print_screen_short_key = ConfigManager.shortcut('alt_print_screen')
-        if alt_print_screen_short_key:
-            keyboard.add_hotkey(
-                alt_print_screen_short_key,
-                cls.executor.add,
-                args=(cls.save_clipboard_by_copy_2_times, ())
-            )
         # Open or close kb.xlsx
         open_excel_short_key = ConfigManager.shortcut('open_excel')
         if open_excel_short_key:
