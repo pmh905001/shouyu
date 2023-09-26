@@ -13,7 +13,7 @@ from typing import Union
 
 from shouyu.config import ConfigManager
 from shouyu.context import ExcelContext
-from shouyu.msg_box import MessageBox, MessageType
+from shouyu.msgbox import MessageBox, MessageType
 from shouyu.process import ProcessManager
 
 
