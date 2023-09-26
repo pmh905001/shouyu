@@ -60,13 +60,9 @@ class Shortcut:
 
     @classmethod
     @exception_handler
-    def show_column(cls):
-        logging.info("show column")
-        current_time = time.time()
-        if current_time - cls.last_show_time < 3:
-            KbExcel().move_column()
-        else:
-            cls.last_show_time = current_time
+    def show_status(cls):
+        logging.info('show status')
+        KbExcel().move_column()
 
     @classmethod
     @exception_handler
@@ -75,7 +71,7 @@ class Shortcut:
             keyboard._pressed_events.clear()
 
     @classmethod
-    def healthcare(cls):
+    def health_check(cls):
         while True:
             with keyboard._pressed_events_lock:
                 if cls._is_key_overtime(keyboard._pressed_events):
@@ -130,8 +126,11 @@ class Shortcut:
         # show or move current column position
         move_to_right_short_key = ConfigManager.shortcut('move_to_right')
         if move_to_right_short_key:
-            keyboard.add_hotkey(move_to_right_short_key, cls.executor.add,
-                                args=(lambda x: KbExcel().move_column(x), (1,)))
+            keyboard.add_hotkey(
+                move_to_right_short_key,
+                cls.executor.add,
+                args=(lambda x: KbExcel().move_column(x), (1,))
+            )
         move_to_left_short_key = ConfigManager.shortcut('move_to_left')
         if move_to_left_short_key:
             keyboard.add_hotkey(move_to_left_short_key, cls.executor.add,
@@ -144,10 +143,11 @@ class Shortcut:
         if reset_column_short_key:
             keyboard.add_hotkey(reset_column_short_key, cls.executor.add,
                                 args=(lambda: KbExcel().reset_column(), ()))
-        show_status_short_key = ConfigManager.shortcut('show_status')
 
+        show_status_short_key = ConfigManager.shortcut('show_status')
         if show_status_short_key:
-            keyboard.add_hotkey(show_status_short_key, cls.show_column)
+            keyboard.add_hotkey(show_status_short_key, cls.executor.add, args=(cls.show_status, ()))
+
         insert_row_separator_short_key = ConfigManager.shortcut('insert_row_separator')
         if insert_row_separator_short_key:
             keyboard.add_hotkey(insert_row_separator_short_key, lambda x: KbExcel().insert_row_sperator(x),
@@ -161,4 +161,4 @@ class Shortcut:
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)
-        threading.Thread(target=cls.healthcare, daemon=True).start()
+        threading.Thread(target=cls.health_check, daemon=True).start()

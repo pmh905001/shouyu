@@ -6,6 +6,7 @@ import win32gui
 from enum import Enum
 from win11toast import toast
 
+from shouyu.context import ExcelContext
 from shouyu.package import Package
 
 
@@ -15,6 +16,8 @@ class MessageType(Enum):
 
 
 class MessageBox:
+    is_showing_status = False
+
     def __init__(self):
         wc = win32gui.WNDCLASS()
         hinst = wc.hInstance = win32gui.GetModuleHandle(None)
