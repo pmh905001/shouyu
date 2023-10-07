@@ -126,7 +126,7 @@ class KbExcel:
                 row += 1
         logging.info(f'saved text: {txt}!')
 
-    def save(self, data: PILImage or str, ignore_permission_error: bool = False, open_excel_again=True):
+    def save(self, data: PILImage or str, open_excel_again=True):
         msg = None
         duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
         image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
@@ -150,21 +150,17 @@ class KbExcel:
                 # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')
-        except PermissionError as permission_ex:
-            if not ignore_permission_error:
-                logging.info(f'try to terminate process for {self._excel_path}')
-                ProcessManager.terminate_by_path(self._excel_path)
-                try:
-                    self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
-                except Exception as ex:
-                    logging.exception(f'failed to save "{data}"')
-                    MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
-                if open_excel_again:
-                    ProcessManager.open(self._excel_path)
-            else:
+        except PermissionError:
+            logging.info(f'try to terminate process for {self._excel_path}')
+            ProcessManager.terminate_by_path(self._excel_path)
+            try:
+                self._workbook.save(self._excel_path)
+                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
+            except Exception as ex:
                 logging.exception(f'failed to save "{data}"')
-                MessageBox.pop_up_message('Failed', str(permission_ex), MessageType.ERROR, duration, image_path)
+                MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
+            if open_excel_again:
+                ProcessManager.open(self._excel_path)
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
