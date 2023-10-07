@@ -128,7 +128,6 @@ class KbExcel:
 
     def save(self, data: PILImage or str, open_excel_again=True):
         msg = None
-        duration = ConfigManager.shortcut('save_clipboard_popup_duration', '1', lambda x: int(x))
         image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
         try:
             if data:
@@ -141,12 +140,12 @@ class KbExcel:
                     self._save_image(data, anchor)
                     msg = f'{anchor}: Image'
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
                 else:
                     self._save_text(data, anchor)
                     msg = f'{anchor}: {str(data)}'
                     self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration)
+                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
                 # Tray._icon.notify(str(data), 'Success')
             else:
                 logging.info(f'Nothing to save!')
@@ -155,10 +154,10 @@ class KbExcel:
             ProcessManager.terminate_by_path(self._excel_path)
             try:
                 self._workbook.save(self._excel_path)
-                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, duration, image_path)
+                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
             except Exception as ex:
                 logging.exception(f'failed to save "{data}"')
-                MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, duration, image_path)
+                MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, image_path)
             if open_excel_again:
                 ProcessManager.open(self._excel_path)
 
@@ -178,7 +177,6 @@ class KbExcel:
             self._generate_move_message(column_index, ExcelContext.column_steps),
             self._generate_status_message(anchor_or_image),
             MessageType.SUCCESS,
-            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x)),
             image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
         )
 
@@ -203,8 +201,7 @@ class KbExcel:
         MessageBox.pop_up_message(
             'Move',
             self._generate_move_message(column_index, ExcelContext.column_steps),
-            MessageType.SUCCESS,
-            duration=ConfigManager.shortcut('show_status_popup_duration', '2', lambda x: int(x))
+            MessageType.SUCCESS
         )
 
         if self._changed:

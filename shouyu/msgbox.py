@@ -51,7 +51,7 @@ class MessageBox:
         return 0
 
     @classmethod
-    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, duration: int = 5, image_path=None):
+    def pop_up_message(cls, title, msg, level: MessageType = MessageType.SUCCESS, image_path=None):
         # msg_box = MessageBox()
         # msg_box.showMsg(title, msg, level)
         # time.sleep(duration)
@@ -65,8 +65,7 @@ class MessageBox:
             audio={'silent': 'true'},
             icon=os.path.abspath(
                 Package.get_resource_path(f'shouyu\\{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
-
-                )
+            )
         )
 
 
