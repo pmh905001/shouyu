@@ -173,6 +173,7 @@ class KbExcel:
 
         # if ExcelContext.steps:
         logging.info(f'move {ExcelContext.column_steps} steps')
+        self._save_changed()
         MessageBox.pop_up_message(
             self._generate_move_message(column_index, ExcelContext.column_steps),
             self._generate_status_message(anchor_or_image),
@@ -180,8 +181,15 @@ class KbExcel:
             image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
         )
 
+    def _save_changed(self):
         if self._changed:
-            self._workbook.save(self._excel_path)
+            try:
+                self._workbook.save(self._excel_path)
+            except PermissionError:
+                logging.info(f'try to terminate process for {self._excel_path} due to create plan')
+                ProcessManager.terminate_by_path(self._excel_path)
+                self._workbook.save(self._excel_path)
+                ProcessManager.open(self._excel_path)
 
     def insert_row_sperator(self, step=0):
         ExcelContext.row_steps += step
@@ -198,14 +206,12 @@ class KbExcel:
 
         if ExcelContext.column_steps:
             logging.info(f'move {ExcelContext.column_steps} steps')
+        self._save_changed()
         MessageBox.pop_up_message(
             'Move',
             self._generate_move_message(column_index, ExcelContext.column_steps),
             MessageType.SUCCESS
         )
-
-        if self._changed:
-            self._workbook.save(self._excel_path)
 
     def reset_column(self):
         ExcelContext.column_steps = 0
