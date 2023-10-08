@@ -127,39 +127,26 @@ class KbExcel:
         logging.info(f'saved text: {txt}!')
 
     def save(self, data: PILImage or str, open_excel_again=True):
-        msg = None
         image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
-        try:
-            if data:
-                anchor = self._next_anchor(
-                    self._active_worksheet,
-                    ExcelContext.get_column_steps_and_reset(),
-                    ExcelContext.get_row_steps_and_reset()
-                )
-                if isinstance(data, PILImage):
-                    self._append_image(data, anchor)
-                    msg = f'{anchor}: Image'
-                    self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
-                else:
-                    self._append_text(data, anchor)
-                    msg = f'{anchor}: {str(data)}'
-                    self._workbook.save(self._excel_path)
-                    MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
-                # Tray._icon.notify(str(data), 'Success')
-            else:
-                logging.info(f'Nothing to save!')
-        except PermissionError:
-            logging.info(f'try to terminate process for {self._excel_path}')
-            ProcessManager.terminate_by_path(self._excel_path)
-            try:
-                self._workbook.save(self._excel_path)
-                MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
-            except Exception as ex:
-                logging.exception(f'failed to save "{data}"')
-                MessageBox.pop_up_message('Failed', str(ex), MessageType.ERROR, image_path)
-            if open_excel_again:
-                ProcessManager.open(self._excel_path)
+        if data is None:
+            logging.info(f'Nothing to save!')
+            return
+
+        anchor = self._next_anchor(
+            self._active_worksheet,
+            ExcelContext.get_column_steps_and_reset(),
+            ExcelContext.get_row_steps_and_reset()
+        )
+        if isinstance(data, PILImage):
+            self._append_image(data, anchor)
+            msg = f'{anchor}: Image'
+        else:
+            self._append_text(data, anchor)
+            msg = f'{anchor}: {str(data)}'
+        # Tray._icon.notify(str(data), 'Success')
+        self._changed = True
+        self._save_changed()
+        MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
 
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
