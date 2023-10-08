@@ -4,12 +4,12 @@ import threading
 import keyboard
 
 from shouyu.log import setup_log
-from shouyu.shortcut import Shortcut
-from shouyu.tray import Tray
+from shouyu.action.shortcut import Shortcut
+from shouyu.ui.tray import Tray
 
 if __name__ == '__main__':
     setup_log()
-    logging.info('Started shouyu service!')
+    logging.info('Started service!')
     tray = Tray.create()
     threading.Thread(target=tray.run, daemon=True).start()
 

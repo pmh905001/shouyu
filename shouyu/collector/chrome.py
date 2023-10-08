@@ -2,10 +2,10 @@ import pyautogui
 import pyperclip
 import time
 
-from shouyu.collector.basic_collector import BasicCollector
+from shouyu.collector.basecollector import BaseCollector
 
 
-class ChromeCollector(BasicCollector):
+class ChromeCollector(BaseCollector):
 
     def collect_records(self):
         # sleep 500 milliseconds to wait first shortcut (ctrl+alt+enter) released

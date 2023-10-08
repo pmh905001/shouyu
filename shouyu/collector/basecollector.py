@@ -8,7 +8,7 @@ import win32process
 from PIL import ImageGrab
 
 
-class BasicCollector:
+class BaseCollector:
 
     @staticmethod
     def get_process_name():

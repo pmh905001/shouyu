@@ -1,30 +1,32 @@
 import logging
 import math
-import openpyxl
 import os
 import time
+from typing import Union
+
+import openpyxl
 from PIL.Image import Image as PILImage
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.cell import coordinate_from_string
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
-from typing import Union
 
-from shouyu.config import ConfigManager
-from shouyu.context import ExcelContext
-from shouyu.msgbox import MessageBox, MessageType
-from shouyu.process import ProcessManager
+from shouyu.config import Config
+from shouyu.service.context import ExcelContext
+from shouyu.utils.process import ProcessManager
+from shouyu.decorator.servicehandler import service_handler
 
 
 class KbExcel:
-    IMAGE_PATH = '../temp.png'
+    IMAGE_PATH = '../../temp.png'
 
-    def __init__(self, excel_path=ConfigManager.excel_path()):
+    def __init__(self, excel_path=Config.excel_path()):
         self._excel_path = excel_path
         self._worksheet_name = time.strftime('%Y-%m-%d')
         self._workbook: Workbook = self._load_workbook()
         self._changed = False
+        self._pop_up_msgs = None
 
     def _load_workbook(self) -> Workbook:
         if not os.path.exists(self._excel_path):
@@ -125,7 +127,7 @@ class KbExcel:
                 self._active_worksheet[f'{col}{row}'] = line
                 row += 1
         logging.info(f'saved text: {txt}!')
-
+    @service_handler
     def save(self, data: PILImage or str, open_excel_again=True):
         image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
         if data is None:
@@ -143,11 +145,12 @@ class KbExcel:
         else:
             self._append_text(data, anchor)
             msg = f'{anchor}: {str(data)}'
-        # Tray._icon.notify(str(data), 'Success')
         self._changed = True
-        self._save_changed()
-        MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
+        # self._save_changed()
+        self._pop_up_msgs = {'title': 'Success', 'msg': msg, 'image_path': image_path}
+        # MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
 
+    @service_handler
     def move_column(self, step=0):
         anchor_or_image = self.current_anchor(self._active_worksheet)
         ExcelContext.column_steps += step
@@ -160,13 +163,14 @@ class KbExcel:
 
         # if ExcelContext.steps:
         logging.info(f'move {ExcelContext.column_steps} steps')
-        self._save_changed()
-        MessageBox.pop_up_message(
-            self._generate_move_message(column_index, ExcelContext.column_steps),
-            self._generate_status_message(anchor_or_image),
-            MessageType.SUCCESS,
-            image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
-        )
+        # self._save_changed()
+        # MessageBox.pop_up_message(
+        #     self._generate_move_message(column_index, ExcelContext.column_steps),
+        #     self._generate_status_message(anchor_or_image),
+        #     MessageType.SUCCESS,
+        #     image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
+        # )
+        self._pop_up_msgs = {'title': self._generate_move_message(column_index, ExcelContext.column_steps), 'msg': self._generate_status_message(anchor_or_image), 'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None}
 
     def _save_changed(self):
         if self._changed:
@@ -178,14 +182,9 @@ class KbExcel:
                 self._workbook.save(self._excel_path)
                 ProcessManager.open(self._excel_path)
 
-    def insert_row_sperator(self, step=0):
-        ExcelContext.row_steps += step
-        self.move_column()
 
-    def switch_one_or_multiple_cell_mode(self):
-        ExcelContext.one_cell_mode = not ExcelContext.one_cell_mode
-        self.move_column()
 
+    @service_handler
     def move_to_home(self):
         old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
         column_index = column_index_from_string(old)
@@ -193,16 +192,15 @@ class KbExcel:
 
         if ExcelContext.column_steps:
             logging.info(f'move {ExcelContext.column_steps} steps')
-        self._save_changed()
-        MessageBox.pop_up_message(
-            'Move',
-            self._generate_move_message(column_index, ExcelContext.column_steps),
-            MessageType.SUCCESS
-        )
+        # self._save_changed()
+        # MessageBox.pop_up_message(
+        #     'Move',
+        #     self._generate_move_message(column_index, ExcelContext.column_steps),
+        #     MessageType.SUCCESS
+        # )
+        self._pop_up_msgs = {'title': 'Move', 'msg': self._generate_move_message(column_index, ExcelContext.column_steps)}
 
-    def reset_column(self):
-        ExcelContext.column_steps = 0
-        self.move_column()
+
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):

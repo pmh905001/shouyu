@@ -1,7 +1,6 @@
 import logging
 
-from shouyu.config import ConfigManager
-from shouyu.msgbox import MessageBox, MessageType
+from shouyu.ui.msgbox import MessageBox, MessageType
 
 
 def exception_handler(func):

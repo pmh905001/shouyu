@@ -6,9 +6,9 @@ import sys
 from PIL import Image
 from pystray import MenuItem
 
-from shouyu.config import ConfigManager
-from shouyu.package import Package
-from shouyu.process import ProcessManager
+from shouyu.config import Config
+from shouyu.utils.package import Package
+from shouyu.utils.process import ProcessManager
 
 
 class Tray:
@@ -30,7 +30,7 @@ class Tray:
         icon.stop()
         # sys.exit() can stop tray only, but the keyboard is still running.
         psutil.Process().terminate()
-        logging.info('Stopped shouyu service!')
+        logging.info('Stopped service!')
 
     @classmethod
     def on_restart(cls, icon, item):
@@ -39,7 +39,7 @@ class Tray:
 
     @classmethod
     def on_show(cls, icon, item):
-        ProcessManager.open(ConfigManager.excel_path())
+        ProcessManager.open(Config.excel_path())
 
 
 if __name__ == '__main__':

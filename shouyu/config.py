@@ -1,10 +1,10 @@
 import iniconfig
 import os
 
-from shouyu.package import Package
+from shouyu.utils.package import Package
 
 
-class ConfigManager:
+class Config:
     ini = None
 
     @classmethod
@@ -27,9 +27,9 @@ class ConfigManager:
         return cls.get('excel_path', 'kb.xlsx')
 
     @classmethod
-    def shortcut(cls, key, default=None, convert=None):
+    def get_shortcut(cls, key, default=None, convert=None):
         return cls.get(key, default, 'shortcuts', convert)
 
 
 if __name__ == '__main__':
-    print(ConfigManager.get('excel_path', 'kb.xlsx'))
+    print(Config.get('excel_path', 'kb.xlsx'))
