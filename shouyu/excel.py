@@ -111,12 +111,12 @@ class KbExcel:
 
         return 1
 
-    def _save_image(self, img: PILImage, anchor: str):
+    def _append_image(self, img: PILImage, anchor: str):
         img.save(self.IMAGE_PATH)
         self._active_worksheet.add_image(Image(self.IMAGE_PATH), anchor)
         logging.info('saved image!')
 
-    def _save_text(self, txt: str, anchor: str):
+    def _append_text(self, txt: str, anchor: str):
         if ExcelContext.one_cell_mode:
             self._active_worksheet[anchor] = txt
         else:
@@ -137,12 +137,12 @@ class KbExcel:
                     ExcelContext.get_row_steps_and_reset()
                 )
                 if isinstance(data, PILImage):
-                    self._save_image(data, anchor)
+                    self._append_image(data, anchor)
                     msg = f'{anchor}: Image'
                     self._workbook.save(self._excel_path)
                     MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
                 else:
-                    self._save_text(data, anchor)
+                    self._append_text(data, anchor)
                     msg = f'{anchor}: {str(data)}'
                     self._workbook.save(self._excel_path)
                     MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS)
