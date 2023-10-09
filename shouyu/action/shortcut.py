@@ -1,18 +1,19 @@
-import keyboard
 import logging
-import pyperclip
 import threading
 import time
+
+import keyboard
+import pyperclip
 from PIL import ImageGrab
 
 from shouyu.collector.basecollector import BaseCollector
 from shouyu.collector.chrome import ChromeCollector
 from shouyu.config import Config
+from shouyu.decorator.actionhandler import action_handler
+from shouyu.queue import TaskExecutor
 from shouyu.service.context import ExcelContext
 from shouyu.service.excel import KbExcel
-from shouyu.decorator.exceptionhandler import exception_handler
 from shouyu.utils.process import ProcessManager
-from shouyu.queue import TaskExecutor
 
 
 class Shortcut:
@@ -25,14 +26,14 @@ class Shortcut:
         threading.Thread(target=cls.executor.run, daemon=True).start()
 
     @staticmethod
-    @exception_handler
+    @action_handler
     def save_clipboard():
         img = ImageGrab.grabclipboard()
         copied_text = pyperclip.paste()
-        KbExcel().save(img or copied_text)
+        KbExcel().append(img or copied_text)
 
     @classmethod
-    @exception_handler
+    @action_handler
     def save_clipboard_by_copy_2_times(cls):
         current_time = time.time()
         if current_time - cls.last_copy_time < 3:
@@ -48,24 +49,25 @@ class Shortcut:
             return BaseCollector()
 
     @classmethod
-    @exception_handler
+    @action_handler
     def one_key_save(cls):
         collector = cls._generate_collector()
         records = collector.collect_records()
         for index, record in enumerate(records):
             if index == 1:
                 ExcelContext.column_steps = 1
-            KbExcel().save(record, open_excel_again=False)
+            KbExcel().append(record)
+
         ExcelContext.column_steps = -1
 
     @classmethod
-    @exception_handler
+    @action_handler
     def show_status(cls):
         logging.info('show status')
         KbExcel().move_column()
 
     @classmethod
-    @exception_handler
+    @action_handler
     def clear_pressed_events(cls):
         with keyboard._pressed_events_lock:
             keyboard._pressed_events.clear()
@@ -86,40 +88,40 @@ class Shortcut:
                 return True
 
     @classmethod
-    @exception_handler
+    @action_handler
     def move_to_left_or_right(cls, steps):
         KbExcel().move_column(steps)
 
     @classmethod
-    @exception_handler
+    @action_handler
     def reset_column(cls):
         ExcelContext.column_steps = 0
         KbExcel().move_column()
 
     @classmethod
-    @exception_handler
+    @action_handler
     def move_to_home(cls):
         KbExcel().move_to_home()
 
     @classmethod
-    @exception_handler
-    def insert_row_sperator(cls, step=0):
+    @action_handler
+    def insert_row_separator(cls, step=0):
         ExcelContext.row_steps += step
         KbExcel().move_column()
 
     @classmethod
-    @exception_handler
+    @action_handler
     def switch_one_or_multiple_cell_mode(cls):
         ExcelContext.one_cell_mode = not ExcelContext.one_cell_mode
         KbExcel().move_column()
 
     @classmethod
-    @exception_handler
+    @action_handler
     def open_excel(cls):
         ProcessManager.open(Config.excel_path())
 
     @classmethod
-    @exception_handler
+    @action_handler
     def close_excel(cls):
         ProcessManager.terminate_by_path(Config.excel_path())
 
@@ -166,7 +168,7 @@ class Shortcut:
 
         insert_row_separator_short_key = Config.get_shortcut('insert_row_separator')
         if insert_row_separator_short_key:
-            keyboard.add_hotkey(insert_row_separator_short_key, cls.insert_row_sperator, args=(1,))
+            keyboard.add_hotkey(insert_row_separator_short_key, cls.insert_row_separator, args=(1,))
 
         one_or_multiple_cells_mode_short_key = Config.get_shortcut('one_or_multiple_cells_mode')
         if one_or_multiple_cells_mode_short_key:

@@ -13,9 +13,9 @@ from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from shouyu.config import Config
+from shouyu.decorator.servicehandler import service_handler
 from shouyu.service.context import ExcelContext
 from shouyu.utils.process import ProcessManager
-from shouyu.decorator.servicehandler import service_handler
 
 
 class KbExcel:
@@ -127,9 +127,9 @@ class KbExcel:
                 self._active_worksheet[f'{col}{row}'] = line
                 row += 1
         logging.info(f'saved text: {txt}!')
+
     @service_handler
-    def save(self, data: PILImage or str, open_excel_again=True):
-        image_path = os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
+    def append(self, data: PILImage or str):
         if data is None:
             logging.info(f'Nothing to save!')
             return
@@ -146,9 +146,11 @@ class KbExcel:
             self._append_text(data, anchor)
             msg = f'{anchor}: {str(data)}'
         self._changed = True
-        # self._save_changed()
-        self._pop_up_msgs = {'title': 'Success', 'msg': msg, 'image_path': image_path}
-        # MessageBox.pop_up_message('Success', msg, MessageType.SUCCESS, image_path)
+        self._pop_up_msgs = {
+            'title': 'Success',
+            'msg': msg,
+            'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
+        }
 
     @service_handler
     def move_column(self, step=0):
@@ -161,28 +163,22 @@ class KbExcel:
         if column_index + ExcelContext.column_steps > 16384:
             ExcelContext.column_steps = 16384 - column_index
 
-        # if ExcelContext.steps:
         logging.info(f'move {ExcelContext.column_steps} steps')
-        # self._save_changed()
-        # MessageBox.pop_up_message(
-        #     self._generate_move_message(column_index, ExcelContext.column_steps),
-        #     self._generate_status_message(anchor_or_image),
-        #     MessageType.SUCCESS,
-        #     image_path=os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
-        # )
-        self._pop_up_msgs = {'title': self._generate_move_message(column_index, ExcelContext.column_steps), 'msg': self._generate_status_message(anchor_or_image), 'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None}
+        self._pop_up_msgs = {
+            'title': self._generate_move_message(column_index, ExcelContext.column_steps),
+            'msg': self._generate_status_message(anchor_or_image),
+            'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
+        }
 
     def _save_changed(self):
         if self._changed:
             try:
                 self._workbook.save(self._excel_path)
             except PermissionError:
-                logging.info(f'try to terminate process for {self._excel_path} due to create plan')
+                logging.info(f'try to terminate process for {self._excel_path}')
                 ProcessManager.terminate_by_path(self._excel_path)
+                ExcelContext.terminated_excel = True
                 self._workbook.save(self._excel_path)
-                ProcessManager.open(self._excel_path)
-
-
 
     @service_handler
     def move_to_home(self):
@@ -192,15 +188,10 @@ class KbExcel:
 
         if ExcelContext.column_steps:
             logging.info(f'move {ExcelContext.column_steps} steps')
-        # self._save_changed()
-        # MessageBox.pop_up_message(
-        #     'Move',
-        #     self._generate_move_message(column_index, ExcelContext.column_steps),
-        #     MessageType.SUCCESS
-        # )
-        self._pop_up_msgs = {'title': 'Move', 'msg': self._generate_move_message(column_index, ExcelContext.column_steps)}
-
-
+        self._pop_up_msgs = {
+            'title': 'Move',
+            'msg': self._generate_move_message(column_index, ExcelContext.column_steps)
+        }
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
