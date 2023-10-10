@@ -64,7 +64,7 @@ class MessageBox:
             duration='short',
             audio={'silent': 'true'},
             icon=os.path.abspath(
-                Package.get_resource_path(f'shouyu\\{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
+                Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
             )
         )
 
