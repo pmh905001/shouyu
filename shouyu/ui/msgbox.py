@@ -31,17 +31,18 @@ class MessageBox:
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
 
     def showMsg(self, title, msg, level: int = MessageType.SUCCESS):
-        nid = (self.hwnd,
-               0,
-               win32gui.NIF_INFO,
-               0,
-               0,
-               "MessageBox",
-               msg,
-               0,
-               title,
-               win32gui.NIIF_INFO + win32gui.NIIF_NOSOUND if level == MessageType.SUCCESS else win32gui.NIIF_ERROR
-               )
+        nid = (
+            self.hwnd,
+            0,
+            win32gui.NIF_INFO,
+            0,
+            0,
+            "MessageBox",
+            msg,
+            0,
+            title,
+            win32gui.NIIF_INFO + win32gui.NIIF_NOSOUND if level == MessageType.SUCCESS else win32gui.NIIF_ERROR
+        )
         win32gui.Shell_NotifyIcon(win32gui.NIM_MODIFY, nid)
 
     def OnDestroy(self, hwnd, msg, wparam, lparam):
@@ -64,7 +65,9 @@ class MessageBox:
             duration='short',
             audio={'silent': 'true'},
             icon=os.path.abspath(
-                Package.get_resource_path(f'{"success.png" if level == MessageType.SUCCESS else "failed.png"}')
+                Package.get_resource_path(
+                    f'resources/icons/{"success.png" if level == MessageType.SUCCESS else "failed.png"}'
+                )
             )
         )
 
