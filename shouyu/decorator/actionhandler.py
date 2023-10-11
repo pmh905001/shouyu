@@ -2,8 +2,8 @@ import logging
 
 from shouyu.config import Config
 from shouyu.service.context import ExcelContext
-from shouyu.ui.msgbox import MessageBox, MessageType
-from shouyu.utils.process import ProcessManager
+from shouyu.view.msgbox import MessageBox, MessageType
+from shouyu.util.process import ProcessManager
 
 
 def action_handler(func):

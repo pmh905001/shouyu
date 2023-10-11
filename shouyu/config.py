@@ -1,7 +1,7 @@
 import iniconfig
 import os
 
-from shouyu.utils.package import Package
+from shouyu.util.package import Package
 
 
 class Config:

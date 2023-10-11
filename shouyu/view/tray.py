@@ -7,8 +7,8 @@ from PIL import Image
 from pystray import MenuItem
 
 from shouyu.config import Config
-from shouyu.utils.package import Package
-from shouyu.utils.process import ProcessManager
+from shouyu.util.package import Package
+from shouyu.util.process import ProcessManager
 
 
 class Tray:

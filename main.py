@@ -5,7 +5,7 @@ import keyboard
 
 from shouyu.log import setup_log
 from shouyu.action.shortcut import Shortcut
-from shouyu.ui.tray import Tray
+from shouyu.view.tray import Tray
 
 if __name__ == '__main__':
     setup_log()

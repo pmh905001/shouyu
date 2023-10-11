@@ -1,4 +1,4 @@
-from shouyu.ui.msgbox import MessageBox
+from shouyu.view.msgbox import MessageBox
 
 
 def service_handler(func):

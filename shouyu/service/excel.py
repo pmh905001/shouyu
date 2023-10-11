@@ -15,7 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from shouyu.config import Config
 from shouyu.decorator.servicehandler import service_handler
 from shouyu.service.context import ExcelContext
-from shouyu.utils.process import ProcessManager
+from shouyu.util.process import ProcessManager
 
 
 class KbExcel:

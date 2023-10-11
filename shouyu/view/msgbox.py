@@ -7,7 +7,7 @@ import win32con
 import win32gui
 from win11toast import toast
 
-from shouyu.utils.package import Package
+from shouyu.util.package import Package
 
 
 class MessageType(Enum):

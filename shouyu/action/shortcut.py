@@ -13,7 +13,7 @@ from shouyu.decorator.actionhandler import action_handler
 from shouyu.queue import TaskExecutor
 from shouyu.service.context import ExcelContext
 from shouyu.service.excel import KbExcel
-from shouyu.utils.process import ProcessManager
+from shouyu.util.process import ProcessManager
 
 
 class Shortcut:
