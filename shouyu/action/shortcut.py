@@ -126,53 +126,31 @@ class Shortcut:
         ProcessManager.terminate_by_path(Config.excel_path())
 
     @classmethod
+    def _add_hot_key_from_config(cls, key, fun, args=()):
+        save_clipboard_short_key = Config.get_shortcut(key)
+        if save_clipboard_short_key:
+            keyboard.add_hotkey(save_clipboard_short_key, cls.executor.add, args=(fun, args))
+
+    @classmethod
     def register_hot_keys(cls):
         # save clipboard to kb.xlsx
-        one_key_save_short_key = Config.get_shortcut('one_key_save')
-        if one_key_save_short_key:
-            keyboard.add_hotkey(one_key_save_short_key, cls.executor.add, args=(cls.one_key_save, ()))
-
+        cls._add_hot_key_from_config('one_key_save', cls.one_key_save)
         keyboard.add_hotkey('ctrl+c', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
         keyboard.add_hotkey('print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
         keyboard.add_hotkey('windows+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
         keyboard.add_hotkey('alt+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-
-        save_clipboard_short_key = Config.get_shortcut('save_clipboard')
-        if save_clipboard_short_key:
-            keyboard.add_hotkey(save_clipboard_short_key, cls.executor.add, args=(cls.save_clipboard, ()))
+        cls._add_hot_key_from_config('save_clipboard', cls.save_clipboard)
         # Open or close kb.xlsx
-        open_excel_short_key = Config.get_shortcut('open_excel')
-        if open_excel_short_key:
-            keyboard.add_hotkey(open_excel_short_key, cls.open_excel)
-        close_excel_short_key = Config.get_shortcut('close_excel')
-        if close_excel_short_key:
-            keyboard.add_hotkey(close_excel_short_key, cls.close_excel)
+        cls._add_hot_key_from_config('open_excel', cls.open_excel)
+        cls._add_hot_key_from_config('close_excel', cls.close_excel)
         # show or move current column position
-        move_to_right_short_key = Config.get_shortcut('move_to_right')
-        if move_to_right_short_key:
-            keyboard.add_hotkey(move_to_right_short_key, cls.executor.add, args=(cls.move_to_left_or_right, (1,)))
-        move_to_left_short_key = Config.get_shortcut('move_to_left')
-        if move_to_left_short_key:
-            keyboard.add_hotkey(move_to_left_short_key, cls.executor.add, args=(cls.move_to_left_or_right, (-1,)))
-        home_short_key = Config.get_shortcut('home')
-        if home_short_key:
-            keyboard.add_hotkey(home_short_key, cls.executor.add, args=(cls.move_to_home, ()))
-
-        reset_column_short_key = Config.get_shortcut('reset_column')
-        if reset_column_short_key:
-            keyboard.add_hotkey(reset_column_short_key, cls.executor.add, args=(cls.reset_column, ()))
-
-        show_status_short_key = Config.get_shortcut('show_status')
-        if show_status_short_key:
-            keyboard.add_hotkey(show_status_short_key, cls.executor.add, args=(cls.show_status, ()))
-
-        insert_row_separator_short_key = Config.get_shortcut('insert_row_separator')
-        if insert_row_separator_short_key:
-            keyboard.add_hotkey(insert_row_separator_short_key, cls.insert_row_separator, args=(1,))
-
-        one_or_multiple_cells_mode_short_key = Config.get_shortcut('one_or_multiple_cells_mode')
-        if one_or_multiple_cells_mode_short_key:
-            keyboard.add_hotkey(one_or_multiple_cells_mode_short_key, cls.switch_one_or_multiple_cell_mode)
+        cls._add_hot_key_from_config('move_to_right', cls.move_to_left_or_right, (1,))
+        cls._add_hot_key_from_config('move_to_left', cls.move_to_left_or_right, (-1,))
+        cls._add_hot_key_from_config('home', cls.move_to_home)
+        cls._add_hot_key_from_config('reset_column', cls.reset_column)
+        cls._add_hot_key_from_config('show_status', cls.show_status)
+        cls._add_hot_key_from_config('insert_row_separator', cls.insert_row_separator, (1,))
+        cls._add_hot_key_from_config('one_or_multiple_cells_mode', cls.switch_one_or_multiple_cell_mode)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)
