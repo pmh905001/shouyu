@@ -1,8 +1,9 @@
 import logging
-import os
-import psutil
+import subprocess
 import threading
 import time
+
+import psutil
 from psutil import AccessDenied
 
 
@@ -43,9 +44,19 @@ class ProcessManager:
 
     @staticmethod
     def open(excel_path):
-        # if call os.system(excel_path), system will be blocked, shortcut would not task effects.
-        threading.Thread(target=os.system, args=(excel_path,)).start()
-
+        # If call os.system(excel_path), hot keys of keyboard will be blocked, so create a new thread to execute.
+        # os.system(excel_path) would result in a duplicated CMD window displayed, to avoid this issue use
+        # subprocess.call() instead of os.system(excel_path)
+        threading.Thread(
+            target=subprocess.call,
+            args=(excel_path,),
+            kwargs={
+                'shell': True,
+                'stdin': subprocess.PIPE,
+                'stdout': subprocess.PIPE,
+                'stderr': subprocess.PIPE
+            }
+        ).start()
 
 if __name__ == '__main__':
     ProcessManager.terminate_by_path('../../kb.xlsx')
