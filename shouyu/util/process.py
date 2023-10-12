@@ -4,7 +4,7 @@ import threading
 import time
 
 import psutil
-from psutil import AccessDenied
+from psutil import AccessDenied, NoSuchProcess
 
 
 class ProcessManager:
@@ -57,6 +57,24 @@ class ProcessManager:
                 'stderr': subprocess.PIPE
             }
         ).start()
+
+    @staticmethod
+    def kill_old_process():
+        with open('pid.txt', 'r') as f:
+            old_pid = f.read()
+            if old_pid:
+                try:
+                    proc = psutil.Process(int(old_pid))
+                    proc.kill()
+                    logging.info(f'killed pid: {old_pid}')
+                except NoSuchProcess:
+                    logging.error(f'process no longer exists (pid={old_pid})')
+                except:
+                    logging.exception(f'failed to kill pid: {old_pid}')
+
+        with open('pid.txt', 'w') as f:
+            f.write(f'{psutil.Process().pid}')
+
 
 if __name__ == '__main__':
     ProcessManager.terminate_by_path('../../kb.xlsx')
