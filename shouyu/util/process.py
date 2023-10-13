@@ -43,13 +43,13 @@ class ProcessManager:
         return procs
 
     @staticmethod
-    def open(excel_path):
+    def open(cmd: str):
         # If call os.system(excel_path), hot keys of keyboard will be blocked, so create a new thread to execute.
         # os.system(excel_path) would result in a duplicated CMD window displayed, to avoid this issue use
         # subprocess.call() instead of os.system(excel_path)
         threading.Thread(
             target=subprocess.call,
-            args=(excel_path,),
+            args=(cmd,),
             kwargs={
                 'shell': True,
                 'stdin': subprocess.PIPE,

@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='shouyu',
-    version='0.2',
+    version='0.4',
     description='Quickly record your mind to MS/WPS Excel file by hot keys, building your personal knowledge base.',
     long_description=open('README.md', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
@@ -28,7 +28,8 @@ setup(
         'pystray',
         'pytest',
         'pywin32',
-        'PyAutoGUI'
+        'PyAutoGUI',
+        'win11toast',
     ],
     py_modules=['shouyu']
 )

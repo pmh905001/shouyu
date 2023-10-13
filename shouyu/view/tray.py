@@ -1,5 +1,7 @@
 import logging
 import os
+import webbrowser
+
 import psutil
 import pystray
 import sys
@@ -19,6 +21,8 @@ class Tray:
         menu = (
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='退出', action=cls.on_exit),
+            MenuItem(text='帮助', action=cls.on_help),
+            MenuItem(text='配置&快捷键', action=cls.on_config),
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
         )
         icon = pystray.Icon("name", Image.open(Package.get_resource_path("resources/icons/fish.jpg")), "授渔", menu)
@@ -40,6 +44,14 @@ class Tray:
     @classmethod
     def on_show(cls, icon, item):
         ProcessManager.open(Config.excel_path())
+
+    @classmethod
+    def on_help(cls, icon, item):
+        webbrowser.open('https://gitee.com/pmh905001/shouyu/blob/main/README.md')
+
+    @classmethod
+    def on_config(cls, icon, item):
+        ProcessManager.open('kb.ini')
 
 
 if __name__ == '__main__':
