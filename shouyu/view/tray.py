@@ -19,10 +19,10 @@ class Tray:
     @classmethod
     def create(cls):
         menu = (
+            MenuItem(text='帮助', action=cls.on_help),
+            MenuItem(text='设置&快捷键', action=cls.on_config),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='退出', action=cls.on_exit),
-            MenuItem(text='帮助', action=cls.on_help),
-            MenuItem(text='配置&快捷键', action=cls.on_config),
             MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
         )
         icon = pystray.Icon("name", Image.open(Package.get_resource_path("resources/icons/fish.jpg")), "授渔", menu)
