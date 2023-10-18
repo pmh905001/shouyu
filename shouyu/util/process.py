@@ -1,4 +1,5 @@
 import logging
+import os.path
 import subprocess
 import threading
 import time
@@ -60,20 +61,23 @@ class ProcessManager:
 
     @staticmethod
     def kill_old_process():
-        with open('pid.txt', 'r') as f:
-            old_pid = f.read()
-            if old_pid:
-                try:
-                    proc = psutil.Process(int(old_pid))
-                    proc.kill()
-                    logging.info(f'killed pid: {old_pid}')
-                except NoSuchProcess:
-                    logging.error(f'process no longer exists (pid={old_pid})')
-                except:
-                    logging.exception(f'failed to kill pid: {old_pid}')
+        file_name = 'pid.txt'
+        current_pid = psutil.Process().pid
+        if os.path.exists(file_name):
+            with open(file_name, 'r') as f:
+                old_pid = int(f.read())
+                if old_pid and old_pid != current_pid:
+                    try:
+                        proc = psutil.Process(old_pid)
+                        proc.kill()
+                        logging.info(f'killed pid: {old_pid}')
+                    except NoSuchProcess:
+                        logging.error(f'process no longer exists (pid={old_pid})')
+                    except:
+                        logging.exception(f'failed to kill pid: {old_pid}')
 
-        with open('pid.txt', 'w') as f:
-            f.write(f'{psutil.Process().pid}')
+        with open(file_name, 'w') as f:
+            f.write(f'{current_pid}')
 
 
 if __name__ == '__main__':
