@@ -1,5 +1,6 @@
-import iniconfig
 import os
+
+import iniconfig
 
 from shouyu.util.package import Package
 
@@ -10,8 +11,9 @@ class Config:
     @classmethod
     def _load(cls):
         if not os.path.exists('kb.ini'):
-            os.system(f'copy {Package.get_resource_path("kb.ini")} kb.ini')
-        cls.ini = iniconfig.IniConfig("kb.ini")
+            source_path = Package.get_resource_path("kb.ini")
+            os.system(f'copy {source_path} kb.ini')
+        cls.ini = iniconfig.IniConfig('kb.ini')
         return cls.ini
 
     @classmethod

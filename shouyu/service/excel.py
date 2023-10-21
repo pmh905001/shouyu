@@ -21,8 +21,8 @@ from shouyu.util.process import ProcessManager
 class KbExcel:
     IMAGE_PATH = '../../temp.png'
 
-    def __init__(self, excel_path=Config.excel_path()):
-        self._excel_path = excel_path
+    def __init__(self, excel_path=None):
+        self._excel_path = excel_path or Config.excel_path()
         self._worksheet_name = time.strftime('%Y-%m-%d')
         self._workbook: Workbook = self._load_workbook()
         self._changed = False
