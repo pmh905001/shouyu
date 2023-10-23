@@ -118,7 +118,7 @@ class Shortcut:
     @classmethod
     @action_handler
     def open_excel(cls):
-        ProcessManager.open(Config.excel_path())
+        ProcessManager.open_file(Config.excel_path())
 
     @classmethod
     @action_handler

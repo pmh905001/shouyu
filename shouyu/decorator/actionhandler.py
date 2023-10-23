@@ -13,7 +13,7 @@ def action_handler(func):
             # Already opened Excel file may not be saved information by this program, so this program have to close it,
             # then try to save it again. After saved successfully, open Excel file agin.
             if ExcelContext.is_terminated_excel_and_reset():
-                ProcessManager.open(Config.excel_path())
+                ProcessManager.open_file(Config.excel_path())
             return result
         except Exception as ex:
             logging.exception('caught unexpected exception!')

@@ -1,6 +1,7 @@
 import logging
 import os.path
 import subprocess
+import sys
 import threading
 import time
 
@@ -44,7 +45,7 @@ class ProcessManager:
         return procs
 
     @staticmethod
-    def open(cmd: str):
+    def open_file(cmd: str):
         # If call os.system(excel_path), hot keys of keyboard will be blocked, so create a new thread to execute.
         # os.system(excel_path) would result in a duplicated CMD window displayed, to avoid this issue use
         # subprocess.call() instead of os.system(excel_path)
@@ -78,6 +79,11 @@ class ProcessManager:
 
         with open(file_name, 'w') as f:
             f.write(f'{current_pid}')
+
+    @staticmethod
+    def retart_myself():
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
 
 
 if __name__ == '__main__':

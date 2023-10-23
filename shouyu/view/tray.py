@@ -1,53 +1,60 @@
 import logging
-import os
+import sys
 import webbrowser
-import winreg
 
 import psutil
 import pystray
-import sys
 from PIL import Image
 from pystray import MenuItem
 
 from shouyu.config import Config
 from shouyu.util.package import Package
 from shouyu.util.process import ProcessManager
+from shouyu.util.reg import Registry
 
 
 class Tray:
     _icon: pystray.Icon = None
+    APP_NAME = 'shouyu'
 
     @classmethod
     def create(cls):
-        menu = (
-            MenuItem(text='帮助', action=cls.on_help),
-            MenuItem(text='设置&快捷键', action=cls.on_config),
-            MenuItem(text='开启开机自启动', action=cls.on_turn_on_auto_run),
-            # TODO: not works, not sure what is wrong
-            # MenuItem(text='关闭开机自启动', action=cls.on_turn_off_auto_run),
-            MenuItem(text='重启', action=cls.on_restart),
-            MenuItem(text='退出', action=cls.on_exit),
-            MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
+        icon = pystray.Icon(
+            "name", Image.open(Package.get_resource_path('resources/icons/fish.jpg')), '授渔', cls._menu()
         )
-        icon = pystray.Icon("name", Image.open(Package.get_resource_path('resources/icons/fish.jpg')), '授渔', menu)
         cls._icon = icon
         return icon
 
     @classmethod
+    def _menu(cls):
+        is_auto_run = Registry.is_auto_run(cls.APP_NAME)
+        menu = (
+            MenuItem(text='帮助', action=cls.on_help),
+            MenuItem(text='设置', action=cls.on_config),
+            MenuItem(
+                text='非开机启动' if is_auto_run else '开机启动',
+                action=cls.on_turn_off_auto_run if is_auto_run else cls.on_turn_on_auto_run
+            ),
+            MenuItem(text='重启', action=cls.on_restart),
+            MenuItem(text='退出', action=cls.on_exit),
+            MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
+        )
+        return menu
+
+    @classmethod
     def on_exit(cls, icon, item):
+        logging.info('Stopping service!')
         icon.stop()
         # sys.exit() can stop tray only, but the keyboard is still running.
         psutil.Process().terminate()
-        logging.info('Stopped service!')
 
     @classmethod
     def on_restart(cls, icon, item):
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
+        ProcessManager.retart_myself()
 
     @classmethod
     def on_show(cls, icon, item):
-        ProcessManager.open(Config.excel_path())
+        ProcessManager.open_file(Config.excel_path())
 
     @classmethod
     def on_help(cls, icon, item):
@@ -55,25 +62,21 @@ class Tray:
 
     @classmethod
     def on_turn_on_auto_run(cls, icon, item):
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_ALL_ACCESS
-        )
-        winreg.SetValueEx(key, 'shouyu', 0, winreg.REG_SZ, sys.argv[0])
-        winreg.CloseKey(key)
-        logging.error('registered key')
+        cls._turn_auto_run(True)
 
     @classmethod
     def on_turn_off_auto_run(cls, icon, item):
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_ALL_ACCESS
-        )
-        winreg.DeleteKey(key, 'shouyu')
-        winreg.CloseKey(key)
-        logging.error('deleted key')
+        cls._turn_auto_run(False)
+
+    @classmethod
+    def _turn_auto_run(cls, turn_on: bool):
+        Registry.set_auto_run(turn_on, cls.APP_NAME, sys.argv[0])
+        cls._icon.menu = cls._menu()
+        cls._icon.update_menu()
 
     @classmethod
     def on_config(cls, icon, item):
-        ProcessManager.open('kb.ini')
+        ProcessManager.open_file('kb.ini')
 
 
 if __name__ == '__main__':
