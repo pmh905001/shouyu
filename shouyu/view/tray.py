@@ -20,7 +20,7 @@ class Tray:
     @classmethod
     def create(cls):
         icon = pystray.Icon(
-            "name", Image.open(Package.get_resource_path('resources/icons/fish.jpg')), '授渔', cls._menu()
+            "name", Image.open(Package.get_resource_path('resources/icons/fish.png')), '授渔', cls._menu()
         )
         cls._icon = icon
         return icon
