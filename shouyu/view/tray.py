@@ -32,8 +32,9 @@ class Tray:
             MenuItem(text='帮助', action=cls.on_help),
             MenuItem(text='设置', action=cls.on_config),
             MenuItem(
-                text='非开机启动' if is_auto_run else '开机启动',
-                action=cls.on_turn_off_auto_run if is_auto_run else cls.on_turn_on_auto_run
+                text='开机启动',
+                action=cls.on_turn_off_auto_run if is_auto_run else cls.on_turn_on_auto_run,
+                checked=cls.display_checked,
             ),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='退出', action=cls.on_exit),
@@ -77,6 +78,10 @@ class Tray:
     @classmethod
     def on_config(cls, icon, item):
         ProcessManager.open_file('kb.ini')
+
+    @classmethod
+    def display_checked(cls, item):
+        return Registry.is_auto_run(cls.APP_NAME)
 
 
 if __name__ == '__main__':
