@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import iniconfig
 
@@ -6,14 +7,15 @@ from shouyu.util.package import Package
 
 
 class Config:
+    FILE_NAME = 'kb.ini'
     ini = None
 
     @classmethod
     def _load(cls):
-        if not os.path.exists('kb.ini'):
-            source_path = Package.get_resource_path("kb.ini")
-            os.system(f'copy {source_path} kb.ini')
-        cls.ini = iniconfig.IniConfig('kb.ini')
+        if not os.path.exists(cls.FILE_NAME):
+            source_path = Package.get_resource_path(cls.FILE_NAME)
+            shutil.copy(source_path, cls.FILE_NAME)
+        cls.ini = iniconfig.IniConfig(cls.FILE_NAME)
         return cls.ini
 
     @classmethod

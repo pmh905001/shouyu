@@ -77,7 +77,7 @@ class Tray:
 
     @classmethod
     def on_config(cls, icon, item):
-        ProcessManager.open_file('kb.ini')
+        ProcessManager.open_file(Config.FILE_NAME)
 
     @classmethod
     def display_checked(cls, item):
