@@ -73,7 +73,6 @@ class Tray:
     def _turn_auto_run(cls, turn_on: bool):
         Registry.set_auto_run(turn_on, cls.APP_NAME, sys.argv[0])
         cls._icon.menu = cls._menu()
-        cls._icon.update_menu()
 
     @classmethod
     def on_config(cls, icon, item):
