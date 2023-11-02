@@ -37,8 +37,8 @@ class Tray:
                 checked=cls.display_checked,
             ),
             MenuItem(text='重启', action=cls.on_restart),
+            MenuItem(text='显示Excel', action=cls.on_show, default=True, visible=False),
             MenuItem(text='退出', action=cls.on_exit),
-            MenuItem(text='显示', action=cls.on_show, default=True, visible=False),
         )
         return menu
 
