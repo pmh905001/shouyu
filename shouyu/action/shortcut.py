@@ -96,6 +96,7 @@ class Shortcut:
     @action_handler
     def reset_column(cls):
         ExcelContext.column_steps = 0
+        ExcelContext.row_steps = 0
         KbExcel().move_column()
 
     @classmethod
@@ -105,8 +106,11 @@ class Shortcut:
 
     @classmethod
     @action_handler
-    def insert_row_separator(cls, step=0):
-        ExcelContext.row_steps += step
+    def move_row_separator(cls, step=0):
+        if ExcelContext.row_steps + step < 0:
+            ExcelContext.row_steps = 0
+        else:
+            ExcelContext.row_steps += step
         KbExcel().move_column()
 
     @classmethod
@@ -149,7 +153,8 @@ class Shortcut:
         cls._add_hot_key_from_config('home', cls.move_to_home)
         cls._add_hot_key_from_config('reset_column', cls.reset_column)
         cls._add_hot_key_from_config('show_status', cls.show_status)
-        cls._add_hot_key_from_config('insert_row_separator', cls.insert_row_separator, (1,))
+        cls._add_hot_key_from_config('insert_row_separator', cls.move_row_separator, (1,))
+        cls._add_hot_key_from_config('remove_row_separator', cls.move_row_separator, (-1,))
         cls._add_hot_key_from_config('one_or_multiple_cells_mode', cls.switch_one_or_multiple_cell_mode)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
