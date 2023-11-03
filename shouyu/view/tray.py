@@ -20,13 +20,13 @@ class Tray:
     @classmethod
     def create(cls):
         icon = pystray.Icon(
-            "name", Image.open(Package.get_resource_path('resources/icons/fish.png')), '授渔', cls._menu()
+            "name", Image.open(Package.get_resource_path('resources/icons/fish.png')), '授渔', cls._menu_items()
         )
         cls._icon = icon
         return icon
 
     @classmethod
-    def _menu(cls):
+    def _menu_items(cls):
         is_auto_run = Registry.is_auto_run(cls.APP_NAME)
         menu = (
             MenuItem(text='帮助', action=cls.on_help),
@@ -72,7 +72,7 @@ class Tray:
     @classmethod
     def _turn_auto_run(cls, turn_on: bool):
         Registry.set_auto_run(turn_on, cls.APP_NAME, sys.argv[0])
-        cls._icon.menu = cls._menu()
+        cls._icon.menu = cls._menu_items()
 
     @classmethod
     def on_config(cls, icon, item):
