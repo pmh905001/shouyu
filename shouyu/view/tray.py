@@ -5,7 +5,7 @@ import webbrowser
 import psutil
 import pystray
 from PIL import Image
-from pystray import MenuItem
+from pystray import Menu, MenuItem
 
 from shouyu.config import Config
 from shouyu.util.package import Package
@@ -72,7 +72,7 @@ class Tray:
     @classmethod
     def _turn_auto_run(cls, turn_on: bool):
         Registry.set_auto_run(turn_on, cls.APP_NAME, sys.argv[0])
-        cls._icon.menu = cls._menu_items()
+        cls._icon.menu = Menu(*cls._menu_items())
 
     @classmethod
     def on_config(cls, icon, item):
