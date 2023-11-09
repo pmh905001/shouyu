@@ -16,24 +16,25 @@ from shouyu.util.reg import Registry
 class Tray:
     _icon: pystray.Icon = None
     APP_NAME = 'shouyu'
+    ICON_IMAGE = 'resources/icons/fish.png'
+    ICON_TILE = '授渔'
 
     @classmethod
     def create(cls):
         icon = pystray.Icon(
-            "name", Image.open(Package.get_resource_path('resources/icons/fish.png')), '授渔', cls._menu_items()
+            cls.APP_NAME, Image.open(Package.get_resource_path(cls.ICON_IMAGE)), cls.ICON_TILE, cls._menu_items()
         )
         cls._icon = icon
         return icon
 
     @classmethod
     def _menu_items(cls):
-        is_auto_run = Registry.is_auto_run(cls.APP_NAME)
         menu = (
             MenuItem(text='帮助', action=cls.on_help),
             MenuItem(text='设置', action=cls.on_config),
             MenuItem(
                 text='开机启动',
-                action=cls.on_turn_off_auto_run if is_auto_run else cls.on_turn_on_auto_run,
+                action=cls.on_turn_on_or_off_auto_running,
                 checked=cls.display_checked,
             ),
             MenuItem(text='重启', action=cls.on_restart),
@@ -62,16 +63,9 @@ class Tray:
         webbrowser.open('https://gitee.com/pmh905001/shouyu/blob/main/README.md')
 
     @classmethod
-    def on_turn_on_auto_run(cls, icon, item):
-        cls._turn_auto_run(True)
-
-    @classmethod
-    def on_turn_off_auto_run(cls, icon, item):
-        cls._turn_auto_run(False)
-
-    @classmethod
-    def _turn_auto_run(cls, turn_on: bool):
-        Registry.set_auto_run(turn_on, cls.APP_NAME, sys.argv[0])
+    def on_turn_on_or_off_auto_running(cls, icon, item):
+        is_auto_run = Registry.is_auto_run(cls.APP_NAME)
+        Registry.set_auto_run(not is_auto_run, cls.APP_NAME, sys.argv[0])
         cls._icon.menu = Menu(*cls._menu_items())
 
     @classmethod
@@ -81,7 +75,3 @@ class Tray:
     @classmethod
     def display_checked(cls, item):
         return Registry.is_auto_run(cls.APP_NAME)
-
-
-if __name__ == '__main__':
-    Tray.create()
