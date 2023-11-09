@@ -32,11 +32,7 @@ class Tray:
         menu = (
             MenuItem(text='帮助', action=cls.on_help),
             MenuItem(text='设置', action=cls.on_config),
-            MenuItem(
-                text='开机启动',
-                action=cls.on_turn_on_or_off_auto_running,
-                checked=cls.display_checked,
-            ),
+            MenuItem(text='开机启动', action=cls.on_turn_on_or_off_auto_running, checked=cls.display_checked),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='显示Excel', action=cls.on_show, default=True, visible=False),
             MenuItem(text='退出', action=cls.on_exit),
@@ -73,5 +69,5 @@ class Tray:
         ProcessManager.open_file(Config.FILE_NAME)
 
     @classmethod
-    def display_checked(cls, item):
+    def display_checked(cls, icon):
         return Registry.is_auto_run(cls.APP_NAME)
