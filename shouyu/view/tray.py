@@ -62,7 +62,6 @@ class Tray:
     def on_turn_on_or_off_auto_running(cls, icon, item):
         is_auto_run = Registry.is_auto_run(cls.APP_NAME)
         Registry.set_auto_run(not is_auto_run, cls.APP_NAME, sys.argv[0])
-        cls._icon.menu = Menu(*cls._menu_items())
 
     @classmethod
     def on_config(cls, icon, item):
