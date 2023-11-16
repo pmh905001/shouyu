@@ -58,8 +58,6 @@ class Shortcut:
                 ExcelContext.column_steps = 1
             KbExcel().append(record)
 
-        ExcelContext.column_steps = -1
-
     @classmethod
     @action_handler
     def show_status(cls):
