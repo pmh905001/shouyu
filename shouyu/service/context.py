@@ -1,7 +1,7 @@
 class ExcelContext:
     column_steps = 0
     row_steps = 0
-    one_cell_mode = True
+    cross_multiple_rows = True
     terminated_excel = False
 
     @classmethod

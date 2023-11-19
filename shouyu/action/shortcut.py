@@ -114,7 +114,7 @@ class Shortcut:
     @classmethod
     @action_handler
     def switch_one_or_multiple_cell_mode(cls):
-        ExcelContext.one_cell_mode = not ExcelContext.one_cell_mode
+        ExcelContext.cross_multiple_rows = not ExcelContext.cross_multiple_rows
         KbExcel().move_column()
 
     @classmethod

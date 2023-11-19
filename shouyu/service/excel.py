@@ -119,13 +119,14 @@ class KbExcel:
         logging.info('saved image!')
 
     def _append_text(self, txt: str, anchor: str):
-        if ExcelContext.one_cell_mode:
-            self._active_worksheet[anchor] = txt
-        else:
+        if ExcelContext.cross_multiple_rows:
             col, row = coordinate_from_string(anchor)
             for line in txt.splitlines():
                 self._active_worksheet[f'{col}{row}'] = line
                 row += 1
+
+        else:
+            self._active_worksheet[anchor] = txt
         logging.info(f'saved text: {txt}!')
 
     @service_handler
@@ -197,7 +198,7 @@ class KbExcel:
     def _generate_move_message(column_index: int, steps: int):
         from_column = get_column_letter(column_index)
         to_column = get_column_letter(column_index + ExcelContext.column_steps)
-        mode = '' if ExcelContext.one_cell_mode else ' & Cross Multiple Rows'
+        mode = '' if ExcelContext.cross_multiple_rows else ' & Content in one cell'
         to_row = '' if ExcelContext.row_steps == 0 else f' & Jump {ExcelContext.row_steps} Rows'
         if steps > 0:
             return f'Move {from_column} -> {to_column}{to_row}{mode}'
