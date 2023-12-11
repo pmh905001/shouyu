@@ -73,7 +73,7 @@ class ProcessManager:
                         proc.kill()
                         logging.info(f'killed pid: {old_pid}')
                     except NoSuchProcess:
-                        logging.error(f'process no longer exists (pid={old_pid})')
+                        logging.warning(f'process no longer exists (pid={old_pid})')
                     except:
                         logging.exception(f'failed to kill pid: {old_pid}')
 

@@ -1,9 +1,12 @@
 import logging
+import os
 import threading
-import time
+from functools import partial
 
 import keyboard
 import pyperclip
+import pywinauto as pywinauto
+import time
 from PIL import ImageGrab
 
 from shouyu.collector.basecollector import BaseCollector
@@ -121,6 +124,22 @@ class Shortcut:
     @action_handler
     def open_excel(cls):
         ProcessManager.open_file(Config.excel_path())
+        cls._visible_excel()
+
+    @classmethod
+    def _visible_excel(cls):
+        excel_file_name = os.path.basename(Config.excel_path())
+        desktop = pywinauto.Desktop(backend="uia")
+        # TODO: support MS excel
+        windows_filter = partial(desktop.windows, top_level_only=False, visible_only=False)
+        windows = windows_filter(title_re=f'{excel_file_name} - WPS Office')
+        if not windows:
+            windows = windows_filter(title_re=r'.*WPS Office')
+        if windows:
+            wind = windows[0]
+            # if opened 2 tab, only click task bar, not select which tab to be visible
+            # TODO: need to select which tab is visible if exists 2 or more tabs.
+            wind.click_input()
 
     @classmethod
     @action_handler
