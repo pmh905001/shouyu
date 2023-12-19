@@ -9,8 +9,8 @@ def service_handler(func):
 
         kb_excel: KbExcel = args[0] if args else None
         if kb_excel:
-            kb_excel._save_changed()
             MessageBox.pop_up_message(**kb_excel._pop_up_msgs)
+            kb_excel._save_changed()
         return result
 
     return wrapper
