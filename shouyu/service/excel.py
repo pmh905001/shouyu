@@ -148,7 +148,7 @@ class KbExcel:
             msg = f'{anchor}: {str(data)}'
         self._changed = True
         self._pop_up_msgs = {
-            'title': 'Success',
+            'title': 'Submitting',
             'msg': msg,
             'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
         }
