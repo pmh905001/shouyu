@@ -39,7 +39,7 @@ class Shortcut:
     @action_handler
     def save_clipboard_by_copy_2_times(cls):
         current_time = time.time()
-        if current_time - cls.last_copy_time < 3:
+        if current_time - cls.last_copy_time < 1:
             cls.save_clipboard()
         else:
             cls.last_copy_time = current_time
