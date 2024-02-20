@@ -11,8 +11,10 @@ def service_handler(func):
 
         kb_excel: KbExcel = args[0] if args else None
         if kb_excel:
-            threading.Thread(target=MessageBox.pop_up_message, kwargs=kb_excel._pop_up_msgs).start()
             # MessageBox.pop_up_message(**kb_excel._pop_up_msgs)
+            # from multiprocessing import Process
+            # Process(target=MessageBox.pop_up_message, kwargs=kb_excel._pop_up_msgs).start()
+            threading.Thread(target=MessageBox.pop_up_message, kwargs=kb_excel._pop_up_msgs).start()
             kb_excel._save_changed()
 
         return result
