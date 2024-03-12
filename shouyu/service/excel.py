@@ -40,6 +40,8 @@ class KbExcel:
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
             worksheet['A1'] = 'plan'
+            # jump to 5 rows
+            ExcelContext.row_steps = 5
             self._changed = True
             self._workbook.active = worksheet
         else:
