@@ -20,6 +20,7 @@ from shouyu.util.process import ProcessManager
 
 class KbExcel:
     IMAGE_PATH = '../../temp.png'
+    POPUP_MSG_LENGTH = 100
 
     def __init__(self, excel_path=None):
         self._excel_path = excel_path or Config.excel_path()
@@ -151,7 +152,7 @@ class KbExcel:
         self._changed = True
         self._pop_up_msgs = {
             'title': 'Submitting',
-            'msg': msg,
+            'msg': msg[:self.POPUP_MSG_LENGTH],
             'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(data, PILImage) else None
         }
 
