@@ -41,7 +41,7 @@ class KbExcel:
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
             worksheet['A1'] = 'plan'
-            worksheet['A7'] = 'task 1: '
+            worksheet['A7'] = 'task: '
             ExcelContext.column_steps = 1
             self._changed = True
             self._workbook.active = worksheet
