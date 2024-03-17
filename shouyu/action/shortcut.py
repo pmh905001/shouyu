@@ -56,10 +56,7 @@ class Shortcut:
     def one_key_save(cls):
         collector = cls._generate_collector()
         records = collector.collect_records()
-        for index, record in enumerate(records):
-            if index == 1:
-                ExcelContext.column_steps = 1
-            KbExcel().append(record)
+        KbExcel().append(records)
 
     @classmethod
     @action_handler
@@ -124,7 +121,7 @@ class Shortcut:
     @action_handler
     def open_excel(cls):
         ProcessManager.open_file(Config.excel_path())
-        cls._visible_excel()
+        # cls._visible_excel()
 
     @classmethod
     def _visible_excel(cls):

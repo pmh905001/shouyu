@@ -13,7 +13,7 @@ class ChromeCollector(BaseCollector):
         title = self.get_title()
         selected = self.get_selected_txt()
         url = self.get_url()
-        return (x for x in (title, selected, url) if x )
+        return [x for x in (title, selected, url) if x]
 
     @staticmethod
     def get_url():

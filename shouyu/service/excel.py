@@ -1,10 +1,10 @@
 import logging
-import math
 import os
-import time
-from typing import Union
+from typing import List, Union
 
+import math
 import openpyxl
+import time
 from PIL.Image import Image as PILImage
 from openpyxl.drawing.image import Image
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -41,8 +41,8 @@ class KbExcel:
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
             worksheet['A1'] = 'plan'
-            # jump to 5 rows
-            ExcelContext.row_steps = 5
+            worksheet['A7'] = 'task 1: '
+            ExcelContext.column_steps = 1
             self._changed = True
             self._workbook.active = worksheet
         else:
@@ -133,9 +133,20 @@ class KbExcel:
         logging.info(f'saved text: {txt}!')
 
     @service_handler
-    def append(self, data: PILImage or str):
-        if data is None:
+    def append(self, data: PILImage or str or List[PILImage or str]):
+        if not data:
             logging.info(f'Nothing to save!')
+            return
+
+        if isinstance(data, list):
+            for record in data:
+                self.append_one_record(record)
+        else:
+            self.append_one_record(data)
+
+    def append_one_record(self, data):
+        if not data:
+            logging.info(f'not save empty or none data!')
             return
 
         anchor = self._next_anchor(
