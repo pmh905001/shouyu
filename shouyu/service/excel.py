@@ -139,6 +139,9 @@ class KbExcel:
             return
 
         if isinstance(data, list):
+            # It is not necessary to pop up message box for every record, not pop up on last record.
+            # Also improve the performance to avoid save multiple times for multiple records .
+            # append() method can be recursive, but logic of pop up message avoid to use recursion.
             for record in data:
                 self.append_one_record(record)
         else:
