@@ -46,7 +46,6 @@ class KbExcel:
             worksheet['B4'] = 'task 3:'
             worksheet['A7'] = 'task 1:'
             worksheet['B8'] = 'detail:'
-            ExcelContext.column_steps = 1
             self._changed = True
             self._workbook.active = worksheet
         else:
