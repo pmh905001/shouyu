@@ -121,6 +121,7 @@ class KbExcel:
 
     def _append_image(self, img: PILImage, anchor: str):
         img.save(self.IMAGE_PATH)
+        self._active_worksheet[anchor]=f'Image created at {time.strftime("%Y-%m-%d %H:%M:%S")}'
         self._active_worksheet.add_image(Image(self.IMAGE_PATH), anchor)
         logging.info('saved image!')
 
