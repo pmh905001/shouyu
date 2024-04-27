@@ -194,13 +194,15 @@ class KbExcel:
 
     def _save_changed(self):
         if self._changed:
-            try:
-                self._workbook.save(self._excel_path)
-            except PermissionError:
-                logging.info(f'try to terminate process for {self._excel_path}')
-                ProcessManager.terminate_by_path(self._excel_path)
-                ExcelContext.terminated_excel = True
-                self._workbook.save(self._excel_path)
+            # if save failed, just pop up failed message.
+            self._workbook.save(self._excel_path)
+            # try:
+            #     self._workbook.save(self._excel_path)
+            # except PermissionError:
+            #     logging.info(f'try to terminate process for {self._excel_path}')
+            #     ProcessManager.terminate_by_path(self._excel_path)
+            #     ExcelContext.terminated_excel = True
+            #     self._workbook.save(self._excel_path)
 
     @service_handler
     def move_to_home(self):
