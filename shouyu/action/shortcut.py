@@ -144,10 +144,13 @@ class Shortcut:
         ProcessManager.terminate_by_path(Config.excel_path())
 
     @classmethod
-    def _add_hot_key_from_config(cls, key, fun, args=()):
-        save_clipboard_short_key = Config.get_shortcut(key)
-        if save_clipboard_short_key:
-            keyboard.add_hotkey(save_clipboard_short_key, cls.executor.add, args=(fun, args))
+    def _add_hot_key_from_config(cls, key, fun, args=(), is_in_queue=True):
+        short_key = Config.get_shortcut(key)
+        if short_key:
+            if is_in_queue:
+                keyboard.add_hotkey(short_key, cls.executor.add, args=(fun, args))
+            else:
+                keyboard.add_hotkey(short_key, fun, args=args)
 
     @classmethod
     def register_hot_keys(cls):
@@ -160,7 +163,7 @@ class Shortcut:
         cls._add_hot_key_from_config('save_clipboard', cls.save_clipboard)
         # Open or close kb.xlsx
         cls._add_hot_key_from_config('open_excel', cls.open_excel)
-        cls._add_hot_key_from_config('close_excel', cls.close_excel)
+        cls._add_hot_key_from_config('close_excel', cls.close_excel, is_in_queue=False)
         # show or move current column position
         cls._add_hot_key_from_config('move_to_right', cls.move_to_left_or_right, (1,))
         cls._add_hot_key_from_config('move_to_left', cls.move_to_left_or_right, (-1,))
