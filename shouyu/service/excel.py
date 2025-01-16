@@ -38,6 +38,12 @@ class KbExcel:
 
     @property
     def _active_worksheet(self) -> Worksheet:
+        if "todo list" in  self._workbook.sheetnames and self._workbook.sheetnames[len(self._workbook.sheetnames)-1] != "todo list":
+           worksheet: Worksheet = self._workbook.get_sheet_by_name("todo list") 
+           self._workbook.move_sheet(worksheet,offset=len(self._workbook.sheetnames)-1)
+           self._changed = True
+           
+        
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
             worksheet['A1'] = 'plan'
