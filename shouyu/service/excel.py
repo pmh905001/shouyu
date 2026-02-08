@@ -243,3 +243,24 @@ class KbExcel:
             return f'{get_column_letter(anchor.col + 1) + str(anchor.row)}: Image'
         else:
             return f'{anchor_or_image[0]}:{anchor_or_image[1]}'
+
+    @classmethod
+    def append_title_to_next_row(cls, title: str):
+        instance = cls()
+        anchor_or_image = instance.current_anchor(instance._active_worksheet)
+        if isinstance(anchor_or_image[1], Image):
+            anchor = anchor_or_image[0]._from
+            current_row = anchor.row + math.ceil(anchor_or_image[1].height / 18)
+        else:
+            _, current_row = coordinate_from_string(anchor_or_image[0])
+        target_cell = f"A{current_row + 1}"
+        instance._active_worksheet[target_cell] = title
+        instance._changed = True
+        instance._pop_up_msgs = {
+            "title": "Plan Updated",
+            "msg": f"已写入标题: {title} -> {target_cell}",
+            "image_path": None,
+        }
+        instance._save_changed()
+        from shouyu.view.msgbox import MessageBox
+        MessageBox.pop_up_message(**instance._pop_up_msgs)
