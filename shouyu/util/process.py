@@ -14,14 +14,14 @@ class ProcessManager:
     def is_file_path_accepted(file_path, proc):
         try:
             return file_path in ','.join(proc.cmdline())
-        except AccessDenied:
+        except (AccessDenied, NoSuchProcess, OSError):
             return False
 
     @staticmethod
     def is_process_name_accepted(proc):
         try:
             return proc.name() in ('wps.exe', '7zFM.exe', 'ms-excel.exe')
-        except AccessDenied:
+        except (AccessDenied, NoSuchProcess, OSError):
             logging.warning(f'Ignore pid: {proc.pid}')
             return False
 
