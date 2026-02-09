@@ -120,6 +120,7 @@ class Shortcut:
     @classmethod
     @action_handler
     def open_excel(cls):
+        KbExcel().move_column()
         ProcessManager.open_file(Config.excel_path())
         # cls._visible_excel()
 
