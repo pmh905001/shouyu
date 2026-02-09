@@ -3,6 +3,7 @@ class ExcelContext:
     row_steps = 0
     cross_multiple_rows = True
     terminated_excel = False
+    show_pop_up_message = True
 
     @classmethod
     def get_column_steps_and_reset(cls):

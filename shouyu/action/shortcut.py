@@ -120,7 +120,9 @@ class Shortcut:
     @classmethod
     @action_handler
     def open_excel(cls):
+        ExcelContext.show_pop_up_message = False
         KbExcel().move_column()
+        ExcelContext.show_pop_up_message = True
         ProcessManager.open_file(Config.excel_path())
         # cls._visible_excel()
 
