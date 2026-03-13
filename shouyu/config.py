@@ -31,6 +31,10 @@ class Config:
         return cls.get('excel_path', 'kb.xlsx')
 
     @classmethod
+    def max_backups(cls):
+        return int(cls.get('max_backups', '100'))
+
+    @classmethod
     def get_shortcut(cls, key, default=None, convert=None):
         return cls.get(key, default, 'shortcuts', convert)
 

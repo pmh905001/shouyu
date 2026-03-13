@@ -1,5 +1,7 @@
+import glob
 import logging
 import os
+import shutil
 from typing import List, Union
 
 import math
@@ -198,17 +200,29 @@ class KbExcel:
             'image_path': os.path.abspath(self.IMAGE_PATH) if isinstance(anchor_or_image[1], Image) else None
         }
 
+    def _backup_excel(self):
+        if not os.path.exists(self._excel_path):
+            return
+
+        excel_dir = os.path.dirname(self._excel_path) or '.'
+        name, ext = os.path.splitext(os.path.basename(self._excel_path))
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        backup_path = os.path.join(excel_dir, f'{name}_backup_{timestamp}{ext}')
+        shutil.copy2(self._excel_path, backup_path)
+        logging.info(f'backup created: {backup_path}')
+
+        pattern = os.path.join(excel_dir, f'{name}_backup_*{ext}')
+        backups = sorted(glob.glob(pattern), key=os.path.getmtime)
+        max_backups = Config.max_backups()
+        while len(backups) > max_backups:
+            oldest = backups.pop(0)
+            os.remove(oldest)
+            logging.info(f'removed old backup: {oldest}')
+
     def _save_changed(self):
         if self._changed:
-            # if save failed, just pop up failed message.
+            self._backup_excel()
             self._workbook.save(self._excel_path)
-            # try:
-            #     self._workbook.save(self._excel_path)
-            # except PermissionError:
-            #     logging.info(f'try to terminate process for {self._excel_path}')
-            #     ProcessManager.terminate_by_path(self._excel_path)
-            #     ExcelContext.terminated_excel = True
-            #     self._workbook.save(self._excel_path)
 
     @service_handler
     def move_to_home(self):
