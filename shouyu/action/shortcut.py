@@ -144,7 +144,7 @@ class Shortcut:
     @classmethod
     @action_handler
     def close_excel(cls):
-        ProcessManager.terminate_by_path(Config.excel_path())
+        ProcessManager.graceful_close_by_path(Config.excel_path())
 
     @classmethod
     def _add_hot_key_from_config(cls, key, fun, args=(), is_in_queue=True):
