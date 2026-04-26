@@ -59,6 +59,13 @@ class KbExcel:
         else:
             worksheet: Worksheet = self._workbook.get_sheet_by_name(self._worksheet_name)
             self._workbook.active = worksheet
+
+        for ws in self._workbook.worksheets:
+            expected = (ws == worksheet)
+            if ws.views.sheetView[0].tabSelected != expected:
+                ws.views.sheetView[0].tabSelected = expected
+                self._changed = True
+
         return worksheet
 
     def current_anchor(self, worksheet: Union[str, Worksheet]) -> str:
