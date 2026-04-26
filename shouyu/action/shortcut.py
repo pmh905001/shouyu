@@ -21,12 +21,59 @@ from shouyu.util.process import ProcessManager
 
 class Shortcut:
     executor = TaskExecutor()
-    last_copy_time = 0
-    last_show_time = 0
+    _press_state = {}
 
     @classmethod
     def start(cls):
         threading.Thread(target=cls.executor.run, daemon=True).start()
+
+    @classmethod
+    def _create_multi_press_handler(cls, actions, time_window=1.0, wait_time=0.6):
+        """Return a handler that distinguishes single / double / triple presses.
+
+        actions: dict mapping press-count to a (callable, args) tuple.
+                 e.g. {2: (fn_2x, ()), 3: (fn_3x, ())}
+        Only counts present in *actions* trigger work; other counts are ignored.
+        When the max count is reached the action fires immediately; otherwise a
+        short timer waits to see whether another press follows.
+        """
+        state = {'count': 0, 'first_time': 0.0, 'timer': None}
+        max_count = max(actions.keys())
+
+        def handler():
+            current_time = time.time()
+            if current_time - state['first_time'] > time_window:
+                state['count'] = 1
+                state['first_time'] = current_time
+            else:
+                state['count'] += 1
+
+            if state.get('timer'):
+                state['timer'].cancel()
+                state['timer'] = None
+
+            if state['count'] >= max_count:
+                count = state['count']
+                state['count'] = 0
+                state['first_time'] = 0
+                fn, args = actions[max_count]
+                cls.executor.add(fn, args)
+            else:
+                count_snapshot = state['count']
+
+                def on_timeout():
+                    if state['count'] == count_snapshot:
+                        state['count'] = 0
+                        state['first_time'] = 0
+                        entry = actions.get(count_snapshot)
+                        if entry:
+                            fn, args = entry
+                            cls.executor.add(fn, args)
+
+                state['timer'] = threading.Timer(wait_time, on_timeout)
+                state['timer'].start()
+
+        return handler
 
     @staticmethod
     @action_handler
@@ -37,12 +84,11 @@ class Shortcut:
 
     @classmethod
     @action_handler
-    def save_clipboard_by_copy_2_times(cls):
-        current_time = time.time()
-        if current_time - cls.last_copy_time < 1:
-            cls.save_clipboard()
-        else:
-            cls.last_copy_time = current_time
+    def save_clipboard_to_column(cls, column):
+        ExcelContext.target_column = column
+        img = ImageGrab.grabclipboard()
+        copied_text = pyperclip.paste()
+        KbExcel().append(img or copied_text)
 
     @classmethod
     def _generate_collector(cls):
@@ -50,13 +96,6 @@ class Shortcut:
             return ChromeCollector()
         else:
             return BaseCollector()
-
-    @classmethod
-    @action_handler
-    def one_key_save(cls):
-        collector = cls._generate_collector()
-        records = collector.collect_records()
-        KbExcel().append(records)
 
     @classmethod
     @action_handler
@@ -87,32 +126,6 @@ class Shortcut:
 
     @classmethod
     @action_handler
-    def move_to_left_or_right(cls, steps):
-        KbExcel().move_column(steps)
-
-    @classmethod
-    @action_handler
-    def reset_column(cls):
-        ExcelContext.column_steps = 0
-        ExcelContext.row_steps = 0
-        KbExcel().move_column()
-
-    @classmethod
-    @action_handler
-    def move_to_home(cls):
-        KbExcel().move_to_home()
-
-    @classmethod
-    @action_handler
-    def move_row_separator(cls, step=0):
-        if ExcelContext.row_steps + step < 0:
-            ExcelContext.row_steps = 0
-        else:
-            ExcelContext.row_steps += step
-        KbExcel().move_column()
-
-    @classmethod
-    @action_handler
     def switch_one_or_multiple_cell_mode(cls):
         ExcelContext.cross_multiple_rows = not ExcelContext.cross_multiple_rows
         KbExcel().move_column()
@@ -124,21 +137,17 @@ class Shortcut:
         KbExcel().move_column()
         ExcelContext.show_pop_up_message = True
         ProcessManager.open_file(Config.excel_path())
-        # cls._visible_excel()
 
     @classmethod
     def _visible_excel(cls):
         excel_file_name = os.path.basename(Config.excel_path())
         desktop = pywinauto.Desktop(backend="uia")
-        # TODO: support MS excel
         windows_filter = partial(desktop.windows, top_level_only=False, visible_only=False)
         windows = windows_filter(title_re=f'{excel_file_name} - WPS Office')
         if not windows:
             windows = windows_filter(title_re=r'.*WPS Office')
         if windows:
             wind = windows[0]
-            # if opened 2 tab, only click task bar, not select which tab to be visible
-            # TODO: need to select which tab is visible if exists 2 or more tabs.
             wind.click_input()
 
     @classmethod
@@ -157,24 +166,27 @@ class Shortcut:
 
     @classmethod
     def register_hot_keys(cls):
-        # save clipboard to kb.xlsx
-        cls._add_hot_key_from_config('one_key_save', cls.one_key_save)
-        keyboard.add_hotkey('ctrl+c', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-        keyboard.add_hotkey('print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-        keyboard.add_hotkey('windows+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-        keyboard.add_hotkey('alt+print screen', cls.executor.add, args=(cls.save_clipboard_by_copy_2_times, ()))
-        cls._add_hot_key_from_config('save_clipboard', cls.save_clipboard)
-        # Open or close kb.xlsx
+        # ctrl+c / print screen: 2x → column B, 3x → column A
+        copy_handler = cls._create_multi_press_handler({
+            2: (cls.save_clipboard_to_column, ('B',)),
+            3: (cls.save_clipboard_to_column, ('A',)),
+        })
+        keyboard.add_hotkey('ctrl+c', copy_handler)
+        keyboard.add_hotkey('print screen', copy_handler)
+        keyboard.add_hotkey('windows+print screen', copy_handler)
+        keyboard.add_hotkey('alt+print screen', copy_handler)
+
+        # save_clipboard: 1x → column B, 2x → column A
+        save_clipboard_handler = cls._create_multi_press_handler({
+            1: (cls.save_clipboard_to_column, ('B',)),
+            2: (cls.save_clipboard_to_column, ('A',)),
+        })
+        short_key = Config.get_shortcut('save_clipboard')
+        if short_key:
+            keyboard.add_hotkey(short_key, save_clipboard_handler)
         cls._add_hot_key_from_config('open_excel', cls.open_excel)
         cls._add_hot_key_from_config('close_excel', cls.close_excel, is_in_queue=False)
-        # show or move current column position
-        cls._add_hot_key_from_config('move_to_right', cls.move_to_left_or_right, (1,))
-        cls._add_hot_key_from_config('move_to_left', cls.move_to_left_or_right, (-1,))
-        cls._add_hot_key_from_config('home', cls.move_to_home)
-        cls._add_hot_key_from_config('reset_column', cls.reset_column)
         cls._add_hot_key_from_config('show_status', cls.show_status)
-        cls._add_hot_key_from_config('insert_row_separator', cls.move_row_separator, (1,))
-        cls._add_hot_key_from_config('remove_row_separator', cls.move_row_separator, (-1,))
         cls._add_hot_key_from_config('one_or_multiple_cells_mode', cls.switch_one_or_multiple_cell_mode)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.

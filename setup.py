@@ -19,6 +19,13 @@ setup(
         'Operating System :: Microsoft :: Windows :: Windows 10',
         'Operating System :: Microsoft :: Windows :: Windows 11'
     ],
+    packages=['shouyu', 'shouyu.action', 'shouyu.collector', 'shouyu.decorator', 'shouyu.service', 'shouyu.util', 'shouyu.view'],
+    py_modules=['run'],
+    entry_points={
+        'console_scripts': [
+            'shouyu=run:cli',
+        ],
+    },
     install_requires=[
         'pyperclip',
         'keyboard',
@@ -30,8 +37,7 @@ setup(
         'pywin32',
         'PyAutoGUI',
         'win11toast',
-    ],
-    py_modules=['shouyu']
+    ]
 )
 
 # Publish commands

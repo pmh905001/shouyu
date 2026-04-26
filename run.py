@@ -64,5 +64,9 @@ def main(argv):
         KbExcel.append_title_to_next_row(title)
 
 
-if __name__ == '__main__':
+def cli():
     main(sys.argv[1:])
+
+
+if __name__ == '__main__':
+    cli()

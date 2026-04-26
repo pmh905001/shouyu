@@ -157,16 +157,15 @@ class KbExcel:
             logging.info(f'Nothing to save!')
             return
 
-        if isinstance(data, list):
-            # It is not necessary to pop up message box for every record, not pop up on last record.
-            # Also improve the performance to avoid save multiple times for multiple records .
-            # append() method can be recursive, but logic of pop up message avoid to use recursion.
-            for record in data:
-                self.append_one_record(record)
-        else:
-            self.append_one_record(data)
+        target_col = ExcelContext.get_target_column_and_reset()
 
-    def append_one_record(self, data):
+        if isinstance(data, (list, tuple)):
+            for record in data:
+                self.append_one_record(record, target_col)
+        else:
+            self.append_one_record(data, target_col)
+
+    def append_one_record(self, data, target_column=None):
         if not data:
             logging.info(f'not save empty or none data!')
             return
@@ -176,6 +175,10 @@ class KbExcel:
             ExcelContext.get_column_steps_and_reset(),
             ExcelContext.get_row_steps_and_reset()
         )
+        if target_column:
+            _, row = coordinate_from_string(anchor)
+            anchor = f'{target_column}{row}'
+
         if isinstance(data, PILImage):
             self._append_image(data, anchor)
             msg = f'{anchor}: Image'
@@ -230,19 +233,6 @@ class KbExcel:
         if self._changed:
             self._backup_excel()
             self._workbook.save(self._excel_path)
-
-    @service_handler
-    def move_to_home(self):
-        old = coordinate_from_string(self._next_anchor(self._active_worksheet))[0]
-        column_index = column_index_from_string(old)
-        ExcelContext.column_steps = 1 - column_index
-
-        if ExcelContext.column_steps:
-            logging.info(f'move {ExcelContext.column_steps} steps')
-        self._pop_up_msgs = {
-            'title': 'Move',
-            'msg': self._generate_move_message(column_index, ExcelContext.column_steps)
-        }
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):
