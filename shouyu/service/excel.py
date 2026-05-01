@@ -17,6 +17,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from shouyu.config import Config
 from shouyu.decorator.servicehandler import service_handler
 from shouyu.service.context import ExcelContext
+from shouyu.service.plan import PlanService
 from shouyu.util.process import ProcessManager
 
 
@@ -48,12 +49,7 @@ class KbExcel:
         
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
-            worksheet['A1'] = 'plan'
-            worksheet['B2'] = 'task 1:'
-            worksheet['B3'] = 'task 2:'
-            worksheet['B4'] = 'task 3:'
-            worksheet['A7'] = 'task 1:'
-            worksheet['B8'] = 'detail:'
+            PlanService(worksheet).seed_default_plan()
             self._changed = True
             self._workbook.active = worksheet
         else:
@@ -275,3 +271,75 @@ class KbExcel:
         instance._save_changed()
         from shouyu.view.msgbox import MessageBox
         MessageBox.pop_up_message(**instance._pop_up_msgs)
+
+    def plan_service(self) -> PlanService:
+        return PlanService(self._active_worksheet)
+
+    def plan_service_for(self, date_str: str):
+        """Return a PlanService bound to <date_str>'s worksheet, or None if it doesn't exist."""
+        if not date_str or date_str not in self._workbook.sheetnames:
+            return None
+        return PlanService(self._workbook[date_str])
+
+    def write_reflection(self, text: str, date_str: str = None) -> None:
+        date_str = date_str or time.strftime('%Y-%m-%d')
+        if 'reflections' in self._workbook.sheetnames:
+            ws = self._workbook['reflections']
+        else:
+            ws = self._workbook.create_sheet('reflections')
+            ws['A1'] = 'date'
+            ws['B1'] = 'reflection'
+        target_row = None
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=1).value == date_str:
+                target_row = row
+                break
+        if target_row is None:
+            target_row = max(ws.max_row, 1) + 1
+            ws.cell(row=target_row, column=1, value=date_str)
+        ws.cell(row=target_row, column=2, value=text or '')
+        self._changed = True
+        self._save_changed()
+
+    def read_reflection(self, date_str: str = None) -> str:
+        date_str = date_str or time.strftime('%Y-%m-%d')
+        if 'reflections' not in self._workbook.sheetnames:
+            return ''
+        ws = self._workbook['reflections']
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=1).value == date_str:
+                return str(ws.cell(row=row, column=2).value or '')
+        return ''
+
+    def append_detail(self, text: str, column: str = 'B') -> str:
+        """Append a single detail value into the active area at the next available row.
+
+        Used by pomodoro and other auto-loggers that should not pop up message boxes.
+        Returns the anchor written to.
+        """
+        if not text:
+            return ''
+        plan = self.plan_service()
+        last_used = plan.last_used_row_in_active_area()
+        start = plan.active_area_start_row()
+        target_row = max(last_used + 1, start)
+        anchor = f'{column}{target_row}'
+        self._active_worksheet[anchor] = text
+        self._changed = True
+        self._save_changed()
+        return anchor
+
+    def force_save(self) -> None:
+        """Public helper to flush pending changes regardless of decorator pipeline."""
+        self._save_changed()
+
+    def mark_changed(self) -> None:
+        self._changed = True
+
+    @property
+    def workbook(self) -> Workbook:
+        return self._workbook
+
+    @property
+    def active_worksheet(self) -> Worksheet:
+        return self._active_worksheet

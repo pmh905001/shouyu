@@ -7,11 +7,14 @@ import threading
 import keyboard
 
 from shouyu.action.shortcut import Shortcut
+from shouyu.config import Config
 from shouyu.log import Log
 from shouyu.service.excel import KbExcel
 from shouyu.util.package import Package
 from shouyu.util.process import ProcessManager
+from shouyu.util.state import AppState
 from shouyu.view.msgbox import MessageBox
+from shouyu.view.qt_app import QtApp
 from shouyu.view.tray import Tray
 
 
@@ -56,6 +59,27 @@ def _run_http_server(port=19823):
         httpd.serve_forever()
 
 
+def _show_habit_dialog_if_needed():
+    """Pop up the habit reminder dialog at most once per day (per user)."""
+    habits = Config.habits()
+    if not habits:
+        return
+    today = AppState.today_str()
+    if AppState.get('last_habit_shown_date') == today:
+        logging.info('habit dialog already shown today, skip')
+        return
+    AppState.set('last_habit_shown_date', today)
+    QtApp.show_habit_dialog(habits)
+
+
+def _start_pomodoro_if_enabled():
+    if not Config.pomodoro_enabled():
+        return
+    from shouyu.service.pomodoro import PomodoroService
+
+    PomodoroService.instance().start_work()
+
+
 if __name__ == '__main__':
     Package.set_cwd()
     Log.setup()
@@ -67,6 +91,12 @@ if __name__ == '__main__':
     # 启动本地 HTTP 服务，用于接收 run.py 的请求
     threading.Thread(target=_run_http_server, daemon=True).start()
 
+    QtApp.start()
     Shortcut.start()
     Shortcut.register_hot_keys()
+
+    # 在 Qt 就绪后弹出当日习惯提醒；如果开启了番茄工作法也一并启动。
+    threading.Timer(1.0, _show_habit_dialog_if_needed).start()
+    threading.Timer(2.0, _start_pomodoro_if_enabled).start()
+
     keyboard.wait()

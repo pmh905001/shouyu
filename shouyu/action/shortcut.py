@@ -156,6 +156,25 @@ class Shortcut:
         ProcessManager.graceful_close_by_path(Config.excel_path())
 
     @classmethod
+    def show_todo_panel(cls):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_todo_panel()
+
+    @classmethod
+    def show_habit_dialog(cls):
+        from shouyu.config import Config
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_habit_dialog(Config.habits())
+
+    @classmethod
+    def toggle_pomodoro(cls):
+        from shouyu.service.pomodoro import PomodoroService
+
+        PomodoroService.instance().toggle()
+
+    @classmethod
     def _add_hot_key_from_config(cls, key, fun, args=(), is_in_queue=True):
         short_key = Config.get_shortcut(key)
         if short_key:
@@ -188,6 +207,9 @@ class Shortcut:
         cls._add_hot_key_from_config('close_excel', cls.close_excel, is_in_queue=False)
         cls._add_hot_key_from_config('show_status', cls.show_status)
         cls._add_hot_key_from_config('one_or_multiple_cells_mode', cls.switch_one_or_multiple_cell_mode)
+        cls._add_hot_key_from_config('show_todo', cls.show_todo_panel, is_in_queue=False)
+        cls._add_hot_key_from_config('show_habits', cls.show_habit_dialog, is_in_queue=False)
+        cls._add_hot_key_from_config('toggle_pomodoro', cls.toggle_pomodoro, is_in_queue=False)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)

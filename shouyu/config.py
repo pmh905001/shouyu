@@ -38,6 +38,50 @@ class Config:
     def get_shortcut(cls, key, default=None, convert=None):
         return cls.get(key, default, 'shortcuts', convert)
 
+    @classmethod
+    def habits(cls):
+        """Return the habit reminder list, ordered by the numeric suffix of habit_<n>."""
+        ini = cls._load()
+        section = ini.sections.get('habits') or {}
+
+        items = []
+        for key, raw_value in section.items():
+            value = (raw_value or '').strip()
+            if not key.startswith('habit_') or not value:
+                continue
+            suffix = key[len('habit_'):]
+            try:
+                order = int(suffix)
+            except ValueError:
+                order = 0
+            items.append((order, value))
+        items.sort(key=lambda x: x[0])
+        return [text for _, text in items]
+
+    @classmethod
+    def pomodoro_enabled(cls):
+        return cls.get('enabled', 'false', 'pomodoro').strip().lower() == 'true'
+
+    @classmethod
+    def pomodoro_work_minutes(cls):
+        return int(cls.get('work_minutes', '25', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_short_break_minutes(cls):
+        return int(cls.get('short_break_minutes', '5', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_long_break_minutes(cls):
+        return int(cls.get('long_break_minutes', '20', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_cycles_before_long_break(cls):
+        return int(cls.get('cycles_before_long_break', '4', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_notify_sound(cls):
+        return cls.get('notify_sound', 'true', 'pomodoro').strip().lower() == 'true'
+
 
 if __name__ == '__main__':
     print(Config.get('excel_path', 'kb.xlsx'))

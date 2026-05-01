@@ -32,6 +32,8 @@ class Tray:
         menu = (
             MenuItem(text='帮助', action=cls.on_help),
             MenuItem(text='设置', action=cls.on_config),
+            MenuItem(text='今日任务', action=cls.on_show_todo),
+            MenuItem(text='番茄: 启停', action=cls.on_toggle_pomodoro),
             MenuItem(text='开机启动', action=cls.on_turn_on_or_off_auto_running, checked=cls.display_checked),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='显示Excel', action=cls.on_show, default=True, visible=False),
@@ -66,6 +68,18 @@ class Tray:
     @classmethod
     def on_config(cls, icon, item):
         ProcessManager.open_file(Config.FILE_NAME)
+
+    @classmethod
+    def on_show_todo(cls, icon, item):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_todo_panel()
+
+    @classmethod
+    def on_toggle_pomodoro(cls, icon, item):
+        from shouyu.service.pomodoro import PomodoroService
+
+        PomodoroService.instance().toggle()
 
     @classmethod
     def display_checked(cls, icon):

@@ -36,6 +36,7 @@ setup(
         'pytest',
         'pywin32',
         'PyAutoGUI',
+        'PySide6-Essentials',
         'win11toast',
     ]
 )
