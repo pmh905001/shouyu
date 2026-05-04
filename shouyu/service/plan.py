@@ -24,12 +24,18 @@ Status is encoded by font color (and a couple of decorations):
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
 
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
+
+
+# Pixels per Excel row used to translate image height -> spanned rows. This
+# matches the constant `_next_anchor` already uses in `excel.py`.
+_PIXELS_PER_ROW = 18
 
 
 class TaskStatus(str, Enum):
@@ -230,7 +236,13 @@ class PlanService:
         return False
 
     def last_used_row_in_active_area(self) -> int:
-        """Return the largest row index in the active area that has any cell value.
+        """Return the largest row index in the active area that's occupied —
+        either by cell text OR by an image's visual footprint.
+
+        Without the image-aware part, appending a pomodoro detail right after
+        a screenshot would land *on top of* the image (because images don't
+        write text into the cells they overlap, so a pure cell-text scan
+        misses them). See excel.py:_next_anchor for the same calculation.
 
         If the active area is empty, returns active_area_start_row() - 1.
         """
@@ -240,6 +252,21 @@ class PlanService:
         for row in range(start, end + 1):
             if self._row_has_any_content(row):
                 last = row
+
+        # Account for any image whose top anchor is inside the active area —
+        # its bottom row must be treated as "used" so the next append goes
+        # below the image rather than on top of it.
+        for img in getattr(self.ws, '_images', None) or []:
+            try:
+                # openpyxl row anchors are 0-indexed; convert to Excel-style 1-indexed.
+                top = img.anchor._from.row + 1
+                height_rows = max(1, math.ceil((img.height or 0) / _PIXELS_PER_ROW))
+                bottom = top + height_rows - 1
+            except Exception:
+                logging.exception("failed to compute image footprint")
+                continue
+            if top >= start and bottom > last:
+                last = bottom
         return last
 
     def list_active_entries(self) -> List[ActiveEntry]:

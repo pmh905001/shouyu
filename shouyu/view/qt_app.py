@@ -13,7 +13,7 @@ import threading
 from typing import List, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 
 class _QtBridge(QObject):
@@ -21,6 +21,7 @@ class _QtBridge(QObject):
     show_habit_signal = Signal(list)
     pomodoro_event_signal = Signal(str, str)
     show_backup_signal = Signal(str)  # payload = path of auto-recovered backup, or ""
+    save_status_signal = Signal(str, str, str)  # (level, title, message)
     quit_signal = Signal()
 
     @Slot()
@@ -66,6 +67,25 @@ class _QtBridge(QObject):
         except Exception:
             logging.exception("failed to show backup restore dialog")
 
+    @Slot(str, str, str)
+    def _on_save_status(self, level: str, title: str, message: str) -> None:
+        try:
+            box = QMessageBox()
+            if level == 'error':
+                box.setIcon(QMessageBox.Critical)
+            elif level == 'warning':
+                box.setIcon(QMessageBox.Warning)
+            else:
+                box.setIcon(QMessageBox.Information)
+            box.setWindowTitle(title or "授渔")
+            box.setText(message)
+            box.setStandardButtons(QMessageBox.Ok)
+            # Force above the always-on-top habit dialog.
+            box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            box.exec()
+        except Exception:
+            logging.exception("failed to display save status message")
+
     @Slot()
     def _on_quit(self) -> None:
         app = QApplication.instance()
@@ -98,6 +118,7 @@ class QtApp:
             cls._bridge.show_habit_signal.connect(cls._bridge._on_show_habit, Qt.QueuedConnection)
             cls._bridge.pomodoro_event_signal.connect(cls._bridge._on_pomodoro_event, Qt.QueuedConnection)
             cls._bridge.show_backup_signal.connect(cls._bridge._on_show_backup, Qt.QueuedConnection)
+            cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
         finally:
             cls._ready.set()
@@ -138,6 +159,14 @@ class QtApp:
             logging.warning("Qt bridge not ready; cannot show backup restore dialog")
             return
         cls._bridge.show_backup_signal.emit(recovered_from or "")
+
+    @classmethod
+    def show_save_status(cls, level: str, title: str, message: str) -> None:
+        """Thread-safe entry to show a save-result QMessageBox in the Qt thread."""
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot show save status")
+            return
+        cls._bridge.save_status_signal.emit(level or 'info', title or "", message or "")
 
     @classmethod
     def quit(cls) -> None:

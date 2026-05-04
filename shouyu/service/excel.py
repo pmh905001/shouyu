@@ -303,9 +303,10 @@ class KbExcel:
             return
         self._backup_excel()
         self._atomic_save()
-        # If we recovered from backup and just persisted the recovered workbook
-        # back to the canonical path, we're back in sync — clear the flag so
-        # subsequent saves don't keep flagging recovery in stats.
+        # Reset so subsequent calls on the same instance don't redundantly save.
+        # This matters now that callers (e.g. habit-dialog retry worker) reuse
+        # one KbExcel instance across multiple save attempts.
+        self._changed = False
         if self._recovered_from_backup is not None:
             logging.info(
                 f"persisted recovered workbook back to {self._excel_path}; "
@@ -319,6 +320,12 @@ class KbExcel:
         If save fails midway (PermissionError, the openpyxl image bug, anything),
         the original file stays untouched. This is the single most important
         safety net — without it a partial save corrupts the canonical Excel.
+
+        On PermissionError (target locked by another program), we DO NOT
+        auto-rename the tmp to `.unsaved_*.xlsx`. Callers that want that
+        last-resort preservation should call `preserve_unsaved()` themselves
+        (typically after their retry budget is exhausted) — otherwise every
+        retry attempt would leak a `.unsaved_*` file.
         """
         excel_dir = os.path.dirname(self._excel_path) or '.'
         name, ext = os.path.splitext(os.path.basename(self._excel_path))
@@ -326,29 +333,33 @@ class KbExcel:
         try:
             self._workbook.save(tmp_path)
         except Exception:
-            # Clean up the half-written tmp file before re-raising.
             self._safe_remove(tmp_path)
             raise
-        # save succeeded; flip the canonical file in one OS call.
         try:
             os.replace(tmp_path, self._excel_path)
-        except PermissionError:
-            # The canonical file is currently locked (most often: the user has
-            # opened it in MS Excel / WPS). The new content is sitting safely
-            # in tmp_path — we keep it on disk so the user can recover it.
-            kept = os.path.join(
-                excel_dir,
-                f'{name}.unsaved_{time.strftime("%Y%m%d_%H%M%S")}{ext}',
-            )
-            try:
-                os.replace(tmp_path, kept)
-                logging.error(
-                    f"target Excel is locked; pending changes preserved at: {kept}"
-                )
-            except Exception:
-                self._safe_remove(tmp_path)
-                logging.exception("failed to preserve unsaved changes")
+        except Exception:
+            self._safe_remove(tmp_path)
             raise
+
+    def preserve_unsaved(self) -> Optional[str]:
+        """Last-resort: write the current in-memory workbook to a sibling
+        `<name>.unsaved_<ts>.xlsx` so the user never silently loses changes
+        even when the canonical file remains locked. Returns the path written
+        or None on failure.
+        """
+        excel_dir = os.path.dirname(self._excel_path) or '.'
+        name, ext = os.path.splitext(os.path.basename(self._excel_path))
+        kept = os.path.join(
+            excel_dir,
+            f'{name}.unsaved_{time.strftime("%Y%m%d_%H%M%S")}{ext}',
+        )
+        try:
+            self._workbook.save(kept)
+            logging.error(f"unsaved changes preserved to: {kept}")
+            return kept
+        except Exception:
+            logging.exception("failed to preserve unsaved changes")
+            return None
 
     @staticmethod
     def _safe_remove(path: str) -> None:
@@ -463,7 +474,10 @@ class KbExcel:
             return None
         return PlanService(self._workbook[date_str])
 
-    def write_reflection(self, text: str, date_str: str = None) -> None:
+    def stage_reflection(self, text: str, date_str: str = None) -> None:
+        """Write the reflection into the in-memory workbook only — does NOT
+        flush to disk. Use when you want to batch the reflection write with
+        plan changes and have a single retryable save at the end."""
         date_str = date_str or time.strftime('%Y-%m-%d')
         if 'reflections' in self._workbook.sheetnames:
             ws = self._workbook['reflections']
@@ -481,6 +495,9 @@ class KbExcel:
             ws.cell(row=target_row, column=1, value=date_str)
         ws.cell(row=target_row, column=2, value=text or '')
         self._changed = True
+
+    def write_reflection(self, text: str, date_str: str = None) -> None:
+        self.stage_reflection(text, date_str)
         self._save_changed()
 
     def read_reflection(self, date_str: str = None) -> str:

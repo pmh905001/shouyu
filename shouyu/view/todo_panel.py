@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import List, Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -109,26 +110,93 @@ def _apply_item_style(item: QListWidgetItem, status: TaskStatus) -> None:
     item.setFont(font)
 
 
+_RETRY_DELAYS_S = [1, 2, 5, 10, 15]
+
+
 def _persist_plan_in_background(
     tasks_snapshot: List[PlanTask], original_in_progress: Optional[str]
 ) -> None:
-    def _worker():
-        try:
-            from shouyu.service.excel import KbExcel
+    """Background save with auto-retry on PermissionError (Excel-locked).
+    See habit_dialog._persist_plan_in_background for the rationale."""
 
-            non_empty = [t for t in tasks_snapshot if (t.text or "").strip()]
-            excel = KbExcel()
-            plan = excel.plan_service()
-            plan.write_plan_tasks(non_empty)
-            new_in_progress = next(
-                (t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None
+    def _stage(excel) -> None:
+        non_empty = [t for t in tasks_snapshot if (t.text or "").strip()]
+        plan = excel.plan_service()
+        plan.write_plan_tasks(non_empty)
+        new_in_progress = next(
+            (t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None
+        )
+        if new_in_progress is not None and new_in_progress.text != original_in_progress:
+            plan.switch_in_progress(new_in_progress)
+        excel.mark_changed()
+
+    def _toast(level, title, msg):
+        try:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                title=title,
+                msg=msg,
+                level=MessageType.ERROR if level == 'error' else MessageType.SUCCESS,
             )
-            if new_in_progress is not None and new_in_progress.text != original_in_progress:
-                plan.switch_in_progress(new_in_progress)
-            excel.mark_changed()
-            excel.force_save()
         except Exception:
-            logging.exception("failed to persist plan from todo panel")
+            logging.exception("toast failed")
+
+    def _worker():
+        from shouyu.service.excel import KbExcel
+
+        excel: Optional[KbExcel] = None
+        last_err: Optional[Exception] = None
+        notified_retry = False
+
+        for attempt in range(len(_RETRY_DELAYS_S) + 1):
+            try:
+                if excel is None:
+                    excel = KbExcel()
+                    _stage(excel)
+                excel.force_save()
+                if attempt > 0:
+                    _toast('ok', "已保存", f"第 {attempt + 1} 次重试成功")
+                return
+            except PermissionError as e:
+                last_err = e
+                logging.warning(f"save attempt {attempt + 1} locked: {e}")
+            except Exception as e:
+                last_err = e
+                logging.exception(f"save attempt {attempt + 1} failed")
+                break
+
+            if attempt < len(_RETRY_DELAYS_S):
+                if not notified_retry:
+                    notified_retry = True
+                    _toast(
+                        'error',
+                        "保存失败 · 后台重试中",
+                        "Excel 文件被占用（最多 30 秒，请关闭 Excel 后等待）",
+                    )
+                time.sleep(_RETRY_DELAYS_S[attempt])
+
+        preserved = ''
+        if excel is not None:
+            try:
+                preserved = excel.preserve_unsaved() or ''
+            except Exception:
+                logging.exception("preserve failed")
+        try:
+            from shouyu.view.qt_app import QtApp
+
+            extra = (
+                f"\n\n改动已保存到备用文件：\n{preserved}"
+                if preserved
+                else "\n\n（备用文件也写入失败；请手动核对最近的备份。）"
+            )
+            QtApp.show_save_status(
+                'error',
+                "任务保存失败",
+                f"保存失败：{last_err}{extra}",
+            )
+        except Exception:
+            logging.exception("final notify failed")
 
     threading.Thread(target=_worker, name="shouyu-save-plan", daemon=True).start()
 

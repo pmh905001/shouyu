@@ -157,32 +157,125 @@ def _card_qss(bg_hex: str) -> str:
     return f"QFrame#Card {{ background-color: {bg_hex}; border-radius: 10px; }}"
 
 
+_RETRY_DELAYS_S = [1, 2, 5, 10, 15]  # ~33s of background retry budget
+
+
 def _persist_plan_in_background(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
     reflection_text: Optional[str] = None,
 ) -> None:
-    """Run the openpyxl backup+save on a worker thread; the UI returns instantly."""
+    """Run the openpyxl backup+save on a worker thread; the UI returns instantly.
+
+    The most common failure is `PermissionError` because the canonical Excel
+    file is currently open in MS Excel / WPS. We retry transparently with
+    exponential-ish backoff (so closing Excel within ~30 seconds rescues the
+    save automatically), and only bother the user with a popup if all retries
+    are exhausted. In that case we also write the in-memory workbook to a
+    sibling `<name>.unsaved_<ts>.xlsx` so the data is never silently lost.
+    """
+
+    def _stage_changes(excel) -> None:
+        non_empty = [t for t in tasks_snapshot if (t.text or "").strip()]
+        plan = excel.plan_service()
+        plan.write_plan_tasks(non_empty)
+        new_in_progress = next(
+            (t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None
+        )
+        if new_in_progress is not None and new_in_progress.text != original_in_progress:
+            plan.switch_in_progress(new_in_progress)
+        if reflection_text is not None:
+            excel.stage_reflection(reflection_text)
+        excel.mark_changed()
+
+    def _notify_retry_started(reason: str) -> None:
+        try:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                title="保存失败 · 后台重试中",
+                msg=f"{reason}（最多 30 秒，请关闭 Excel 后等待）",
+                level=MessageType.ERROR,
+            )
+        except Exception:
+            logging.exception("failed to show retry toast")
+
+    def _notify_success_after_retry(attempt: int) -> None:
+        try:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                title="已保存",
+                msg=f"第 {attempt} 次重试成功",
+                level=MessageType.SUCCESS,
+            )
+        except Exception:
+            logging.exception("failed to show success toast")
+
+    def _notify_final_failure(err: Exception, preserved: str) -> None:
+        try:
+            from shouyu.view.qt_app import QtApp
+
+            is_lock = isinstance(err, PermissionError) or 'Permission' in str(err)
+            if is_lock:
+                msg = (
+                    "保存失败：无法写入 Excel 文件，文件可能正被其他程序（如 MS Excel / WPS）占用。\n\n"
+                    f"已重试 {len(_RETRY_DELAYS_S) + 1} 次仍然失败。"
+                )
+            else:
+                msg = f"保存失败：{err}"
+            if preserved:
+                msg += (
+                    f"\n\n你的改动已经写入备用文件，不会丢失：\n{preserved}\n\n"
+                    "请关闭 Excel，然后下次打开仪式时按提示恢复，或手动用此备用文件覆盖主文件。"
+                )
+            else:
+                msg += "\n\n（备用文件也写入失败；请手动核对最近的备份。）"
+            QtApp.show_save_status('error', "今日仪式保存失败", msg)
+        except Exception:
+            logging.exception("failed to dispatch final-failure popup")
 
     def _worker():
-        try:
-            from shouyu.service.excel import KbExcel
+        from shouyu.service.excel import KbExcel
 
-            non_empty = [t for t in tasks_snapshot if (t.text or "").strip()]
-            excel = KbExcel()
-            plan = excel.plan_service()
-            plan.write_plan_tasks(non_empty)
-            new_in_progress = next(
-                (t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None
-            )
-            if new_in_progress is not None and new_in_progress.text != original_in_progress:
-                plan.switch_in_progress(new_in_progress)
-            excel.mark_changed()
-            excel.force_save()
-            if reflection_text is not None:
-                excel.write_reflection(reflection_text)
-        except Exception:
-            logging.exception("failed to persist plan from habit dialog")
+        excel: Optional[KbExcel] = None
+        last_err: Optional[Exception] = None
+        notified_retry = False
+
+        for attempt in range(len(_RETRY_DELAYS_S) + 1):
+            try:
+                if excel is None:
+                    excel = KbExcel()
+                    _stage_changes(excel)
+                excel.force_save()
+                if attempt > 0:
+                    _notify_success_after_retry(attempt + 1)
+                return
+            except PermissionError as e:
+                last_err = e
+                logging.warning(
+                    f"save attempt {attempt + 1} failed (locked): {e}"
+                )
+            except Exception as e:
+                last_err = e
+                logging.exception(f"save attempt {attempt + 1} failed")
+                # Non-recoverable error class — don't bother retrying.
+                break
+
+            if attempt < len(_RETRY_DELAYS_S):
+                if not notified_retry:
+                    notified_retry = True
+                    _notify_retry_started("Excel 文件被占用")
+                time.sleep(_RETRY_DELAYS_S[attempt])
+
+        # All retries exhausted — preserve in-memory state and notify.
+        preserved = ''
+        if excel is not None:
+            try:
+                preserved = excel.preserve_unsaved() or ''
+            except Exception:
+                logging.exception("failed to preserve unsaved changes")
+        _notify_final_failure(last_err or RuntimeError("unknown"), preserved)
 
     threading.Thread(target=_worker, name="shouyu-save-plan", daemon=True).start()
 
@@ -230,6 +323,11 @@ class HabitDialog(QDialog):
         self.setWindowTitle("授渔 · 今日仪式")
         self.setModal(False)
         self.setSizeGripEnabled(False)
+        # Frameless + always-on-top: the morning ritual MUST be visible above
+        # whatever the user was doing (browser, IDE, etc.). Otherwise the dialog
+        # gets buried and the ritual silently dies.
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         self._habits: List[str] = []
         self._tasks: List[PlanTask] = []
@@ -303,10 +401,6 @@ class HabitDialog(QDialog):
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:
             rect = screen.availableGeometry()
-            # Frameless so it visually feels like a fullscreen ritual but the
-            # taskbar stays visible. We provide our own close button in the header.
-            self.setWindowFlag(Qt.FramelessWindowHint, True)
-            # Re-applying flags requires re-show to take effect.
             self.setGeometry(rect)
         self.show()
         self.raise_()
