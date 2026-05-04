@@ -5,6 +5,7 @@ events from PomodoroService through QtApp.emit_pomodoro_event(...).
 """
 from __future__ import annotations
 
+import random
 from typing import Optional
 
 from PySide6.QtCore import Qt, QPoint
@@ -37,6 +38,24 @@ _PHASE_LABEL = {
 }
 
 
+_BREAK_TIPS = [
+    "🧘 起身活动脖子和肩膀",
+    "👀 看远处 20 秒，让眼睛休息",
+    "💧 喝口水，深呼吸 5 次",
+    "🌳 看看窗外，放空一下",
+    "🤸 伸展身体，活络血液",
+    "☕ 给自己泡杯茶或咖啡",
+    "🚶 走两步，离开座位 1 分钟",
+]
+
+
+_WORK_TIPS = [
+    "🎯 一次只做一件事，关闭其他干扰",
+    "✍️ 记下分心的念头，专注当下",
+    "🤫 这是你不被打断的时间",
+]
+
+
 def _format_remaining(seconds: int) -> str:
     seconds = max(0, int(seconds))
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
@@ -57,7 +76,7 @@ class PomodoroWindow(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setWindowFlag(Qt.Tool, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(260, 110)
+        self.setFixedSize(280, 156)
 
         self._drag_offset: Optional[QPoint] = None
 
@@ -108,12 +127,34 @@ class PomodoroWindow(QWidget):
         self.task_label.setWordWrap(False)
         layout.addWidget(self.task_label)
 
+        self.tip_label = QLabel("")
+        self.tip_label.setStyleSheet(
+            f"color: {SUBTEXT_COLOR_HEX}; font-size: 11px;"
+        )
+        self.tip_label.setWordWrap(True)
+        self.tip_label.setVisible(False)
+        layout.addWidget(self.tip_label)
+
         button_row = QHBoxLayout()
         button_row.setSpacing(6)
         self.toggle_btn = QPushButton("暂停")
         self.toggle_btn.setStyleSheet(self._button_style())
         self.toggle_btn.clicked.connect(self._on_toggle_clicked)
         button_row.addWidget(self.toggle_btn)
+
+        self.extend_btn = QPushButton("+5m")
+        self.extend_btn.setToolTip("延长当前阶段 5 分钟（在状态进入流时用）")
+        self.extend_btn.setStyleSheet(self._button_style())
+        self.extend_btn.clicked.connect(self._on_extend_clicked)
+        self.extend_btn.setVisible(False)
+        button_row.addWidget(self.extend_btn)
+
+        self.skip_break_btn = QPushButton("跳过休息")
+        self.skip_break_btn.setToolTip("跳过休息，回到专注（不推荐，会被记录）")
+        self.skip_break_btn.setStyleSheet(self._button_style())
+        self.skip_break_btn.clicked.connect(self._on_skip_break_clicked)
+        self.skip_break_btn.setVisible(False)
+        button_row.addWidget(self.skip_break_btn)
 
         stop_btn = QPushButton("停止")
         stop_btn.setStyleSheet(self._button_style())
@@ -163,6 +204,7 @@ class PomodoroWindow(QWidget):
             self._set_phase(phase)
             self._set_remaining(duration)
             self._set_task(task_text)
+            self._update_tip(phase)
             self.show()
         elif event == "tick":
             try:
@@ -170,20 +212,35 @@ class PomodoroWindow(QWidget):
             except ValueError:
                 remaining = 0
             self._set_remaining(remaining)
+        elif event == "extended":
+            # phase unchanged; remaining seconds will refresh on next tick
+            pass
         elif event == "paused":
             self._set_phase("paused")
             self.toggle_btn.setText("继续")
         elif event == "resumed":
             snap = PomodoroService.instance().snapshot()
             self._set_phase(snap["phase"])
+            self._update_tip(snap["phase"])
             self.toggle_btn.setText("暂停")
         elif event == "stopped":
             self._set_phase("idle")
             self._set_remaining(0)
+            self._update_tip("idle")
             self.hide()
 
         snapshot = PomodoroService.instance().snapshot()
-        self.cycles_label.setText(f"🍅 {snapshot['completed_today']}")
+        cycles_text = f"🍅 {snapshot['completed_today']}"
+        try:
+            from shouyu.util.state import AppState
+
+            skipped = AppState.get_today_counter('breaks_skipped')
+            if skipped:
+                cycles_text += f"  · 跳休 {skipped}"
+        except Exception:
+            pass
+        self.cycles_label.setText(cycles_text)
+        self._refresh_action_visibility(snapshot["phase"])
 
     def _set_phase(self, phase: str) -> None:
         label, color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
@@ -197,10 +254,34 @@ class PomodoroWindow(QWidget):
 
     def _set_task(self, text: str) -> None:
         if text:
-            shown = text if len(text) <= 26 else text[:25] + "…"
+            shown = text if len(text) <= 28 else text[:27] + "…"
             self.task_label.setText(f"→ {shown}")
         else:
             self.task_label.setText("")
+
+    def _update_tip(self, phase: str) -> None:
+        if phase in ("short_break", "long_break"):
+            self.tip_label.setText(random.choice(_BREAK_TIPS))
+            self.tip_label.setVisible(True)
+        elif phase == "working":
+            self.tip_label.setText(random.choice(_WORK_TIPS))
+            self.tip_label.setVisible(True)
+        else:
+            self.tip_label.clear()
+            self.tip_label.setVisible(False)
+
+    def _refresh_action_visibility(self, phase: str) -> None:
+        if phase == "working":
+            self.extend_btn.setVisible(True)
+            self.extend_btn.setText("+5m")
+            self.skip_break_btn.setVisible(False)
+        elif phase in ("short_break", "long_break"):
+            self.extend_btn.setVisible(True)
+            self.extend_btn.setText("休息+2m")
+            self.skip_break_btn.setVisible(True)
+        else:
+            self.extend_btn.setVisible(False)
+            self.skip_break_btn.setVisible(False)
 
     # ---------- button slots ----------
 
@@ -213,6 +294,18 @@ class PomodoroWindow(QWidget):
         from shouyu.service.pomodoro import PomodoroService
 
         PomodoroService.instance().stop()
+
+    def _on_extend_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        snap = PomodoroService.instance().snapshot()
+        minutes = 2 if snap["phase"] in ("short_break", "long_break") else 5
+        PomodoroService.instance().extend_current_phase(minutes)
+
+    def _on_skip_break_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        PomodoroService.instance().skip_break()
 
     # ---------- drag support ----------
 

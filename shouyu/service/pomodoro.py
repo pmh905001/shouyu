@@ -127,6 +127,29 @@ class PomodoroService:
             self._stop_event.set()
         self._emit("stopped", "")
 
+    def extend_current_phase(self, minutes: int = 5) -> bool:
+        """Add `minutes` to the current phase end time. Useful when in flow."""
+        with self._state_lock:
+            if self._phase not in (Phase.WORKING, Phase.SHORT_BREAK, Phase.LONG_BREAK):
+                return False
+            self._end_time += minutes * 60
+        self._emit("extended", str(minutes))
+        return True
+
+    def skip_break(self) -> bool:
+        """Skip the current break and start a new work phase. Logged in stats."""
+        with self._state_lock:
+            if self._phase not in (Phase.SHORT_BREAK, Phase.LONG_BREAK):
+                return False
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.increment_today_counter('breaks_skipped')
+        except Exception:
+            logging.exception("failed to log break skip")
+        self._begin_phase(Phase.WORKING)
+        return True
+
     def snapshot(self) -> dict:
         with self._state_lock:
             now = time.time()

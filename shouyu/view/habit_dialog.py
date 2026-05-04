@@ -28,12 +28,13 @@ from typing import List, Optional
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -49,6 +50,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtWidgets import QLineEdit
+
+from shouyu.view.duration_dialog import DurationPickerDialog
 
 from shouyu.service.plan import (
     DEFAULT_PLAN_TASKS,
@@ -264,12 +267,27 @@ class HabitDialog(QDialog):
         self._render_streak()
 
     def show_fullscreen(self) -> None:
+        """Open the dialog full-screen but respect the Windows taskbar.
+
+        We deliberately use availableGeometry() (which excludes the taskbar)
+        instead of showFullScreen() so the bottom action buttons (Esc / 开始今天)
+        are never covered by the OS task bar.
+        """
         self._closing = False
         self._save_already_dispatched = False
         self._reset_action_buttons()
         self._update_header()
         self._apply_time_theme()
-        self.showFullScreen()
+
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            rect = screen.availableGeometry()
+            # Frameless so it visually feels like a fullscreen ritual but the
+            # taskbar stays visible. We provide our own close button in the header.
+            self.setWindowFlag(Qt.FramelessWindowHint, True)
+            # Re-applying flags requires re-show to take effect.
+            self.setGeometry(rect)
+        self.show()
         self.raise_()
         self.activateWindow()
         self.list_widget.setFocus()
@@ -308,23 +326,37 @@ class HabitDialog(QDialog):
         row.addStretch(1)
 
         self.streak_label = QLabel("")
+        # Explicit font-family avoids the emoji+CJK fallback issue that caused
+        # the streak text to render as gibberish on some Windows setups.
         self.streak_label.setStyleSheet(
-            f"color: #FF8A4C; font-size: 14px; font-weight: 600;"
+            'color: #FF8A4C; font-size: 14px; font-weight: 600; '
+            'font-family: "Microsoft YaHei UI", "Segoe UI", "Segoe UI Emoji";'
         )
         row.addWidget(self.streak_label)
 
-        close_btn = QPushButton("×")
-        close_btn.setToolTip("关闭 (Esc)")
-        close_btn.setFixedSize(36, 32)
+        close_btn = QPushButton("✕  关闭")
+        close_btn.setToolTip("关闭仪式窗口 (Esc)")
+        close_btn.setMinimumSize(82, 34)
+        close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setAutoDefault(False)
         close_btn.setDefault(False)
         close_btn.setFocusPolicy(Qt.NoFocus)
         close_btn.setStyleSheet(
             "QPushButton {"
-            f"  font-size: 22px; font-weight: 700;"
-            f"  background: transparent; border: none; color: {SUBTEXT_COLOR_HEX};"
+            "  font-size: 13px;"
+            "  font-weight: 600;"
+            "  background-color: rgba(255, 255, 255, 0.06);"
+            "  border: 1px solid rgba(255, 255, 255, 0.18);"
+            "  border-radius: 6px;"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  padding: 4px 14px;"
+            "  min-height: 0;"
             "}"
-            f"QPushButton:hover {{ color: {TEXT_COLOR_HEX}; }}"
+            "QPushButton:hover {"
+            "  background-color: rgba(232, 17, 35, 0.85);"  # Windows close-red
+            "  color: white;"
+            "  border: 1px solid rgba(232, 17, 35, 0.95);"
+            "}"
         )
         close_btn.clicked.connect(self.reject)
         row.addWidget(close_btn)
@@ -411,8 +443,9 @@ class HabitDialog(QDialog):
         layout.addLayout(title_row)
 
         hint = QLabel(
-            "↑↓ 选择 ·  F2 / 回车 编辑 ·  Space 切换状态 ·  Alt+↑↓ 重排 ·  "
-            "拖拽排序 ·  Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  右键查看更多"
+            "↑↓ 选择 ·  F2 / 回车 编辑（编辑中再按回车跳到下一项） ·  "
+            "Space 切换状态 ·  Alt+↑↓ 重排 ·  Ctrl+ + 添加 ·  "
+            "Ctrl+ − 删除 ·  右键 → 设置时长"
         )
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
@@ -453,6 +486,9 @@ class HabitDialog(QDialog):
         self.list_widget.itemChanged.connect(self._on_item_text_edited)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         self.list_widget.model().rowsMoved.connect(self._on_rows_moved)
+        # Excel-like Enter: when the inline editor closes (Enter / Tab / focus
+        # loss) jump to next row. Esc aborts and we leave the cursor put.
+        self.list_widget.itemDelegate().closeEditor.connect(self._on_editor_closed)
         self.task_stack.addWidget(self.list_widget)
 
         self.empty_label = QLabel("🎉  今天还没有任务\n按 Ctrl+ + 添加一项重要的事")
@@ -643,11 +679,13 @@ class HabitDialog(QDialog):
             self.streak_label.setVisible(True)
 
     def _install_shortcuts(self) -> None:
-        bindings = [
+        # Window-wide shortcuts. NOTE: we intentionally do NOT bind plain Return
+        # / Enter here — those must reach the inline editor when one is open.
+        # The "Enter to start editing the current row" affordance is bound to
+        # the list_widget itself with WidgetShortcut context below.
+        window_bindings = [
             ("Space", self._cycle_status),
             ("F2", self._edit_selected),
-            ("Return", self._edit_selected),
-            ("Enter", self._edit_selected),
             ("Alt+Up", lambda: self._move(-1)),
             ("Alt+Down", lambda: self._move(1)),
             ("Ctrl++", self._add_new_task),
@@ -661,10 +699,19 @@ class HabitDialog(QDialog):
             ("Ctrl+P", self._focus_pomodoro_on_selected),
             ("Escape", self.reject),
         ]
-        for sequence, callback in bindings:
+        for sequence, callback in window_bindings:
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(callback)
+
+        # Plain Enter on the list widget itself starts editing the current row.
+        # WidgetShortcut means it only fires when list_widget has focus, NOT
+        # when its inline editor (a child QLineEdit) has focus — so the editor
+        # is free to consume Enter normally and commit.
+        for sequence in ("Return", "Enter"):
+            sc = QShortcut(QKeySequence(sequence), self.list_widget)
+            sc.setContext(Qt.WidgetShortcut)
+            sc.activated.connect(self._edit_selected)
 
     # ---------- list interactions ----------
 
@@ -684,16 +731,31 @@ class HabitDialog(QDialog):
         return text.strip()
 
     def _on_item_text_edited(self, item: QListWidgetItem) -> None:
+        """Called whenever the underlying item text changes. Keeps self._tasks
+        in sync but does NOT advance the cursor — that happens from the
+        delegate's `closeEditor` signal (so we know the editor really closed)."""
         index = self.list_widget.row(item)
         if 0 <= index < len(self._tasks):
             self._tasks[index].text = self._strip_glyph(item.text())
             self._refresh_item(index)
             self._update_stats()
 
+    def _on_editor_closed(self, _editor, hint) -> None:
+        """Excel-like: after the user commits an inline edit, jump editing to
+        the next row. If we're already on the last row and it has content,
+        auto-extend with a new empty row."""
+        if hint == QAbstractItemDelegate.EndEditHint.RevertModelCache:
+            # User pressed Esc. Don't advance.
+            return
+        # Defer so Qt finishes tearing down the previous editor first.
+        QTimer.singleShot(0, self._advance_editing_after_commit)
+
+    def _advance_editing_after_commit(self) -> None:
+        index = self.list_widget.currentRow()
         next_row = index + 1
         if next_row < self.list_widget.count():
             self.list_widget.setCurrentRow(next_row)
-            QTimer.singleShot(0, lambda r=next_row: self._edit_row(r))
+            self._edit_row(next_row)
         elif (
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
@@ -703,7 +765,7 @@ class HabitDialog(QDialog):
             self._render_tasks()
             self.list_widget.setCurrentRow(new_row)
             self._update_stats()
-            QTimer.singleShot(0, lambda r=new_row: self._edit_row(r))
+            self._edit_row(new_row)
 
     def _edit_selected(self) -> None:
         self._edit_row(self.list_widget.currentRow())
@@ -816,16 +878,12 @@ class HabitDialog(QDialog):
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
-        value, ok = QInputDialog.getInt(
-            self,
-            "设置预计时长",
-            f"为「{task.text or '（空任务）'}」设置时长（分钟，0 表示清除）：",
-            value=task.duration_minutes,
-            minValue=0,
-            maxValue=480,
-            step=5,
+        value = DurationPickerDialog.get_duration(
+            current=task.duration_minutes,
+            task_text=task.text or '（空任务）',
+            parent=self,
         )
-        if not ok:
+        if value < 0:
             return
         task.duration_minutes = value
         self._refresh_item(index)
@@ -937,12 +995,37 @@ class HabitDialog(QDialog):
         done = sum(1 for t in self._tasks if t.status == TaskStatus.DONE)
         in_progress = sum(1 for t in self._tasks if t.status == TaskStatus.IN_PROGRESS)
         total_minutes = sum(t.duration_minutes for t in self._tasks if t.duration_minutes > 0)
+        # An estimate >6h on top of meetings/breaks is almost certainly overload.
+        OVERLOAD_THRESHOLD_MIN = 360
+        unestimated = sum(
+            1
+            for t in self._tasks
+            if (t.text or '').strip() and t.duration_minutes <= 0
+        )
+
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
         if total_minutes:
-            parts.append(f"≈ {total_minutes}m 估时")
+            hours = total_minutes / 60
+            if total_minutes > OVERLOAD_THRESHOLD_MIN:
+                parts.append(f"⚠ 预计 {hours:.1f}h 超载")
+            else:
+                parts.append(f"≈ {hours:.1f}h 已估时")
+        if unestimated > 0:
+            parts.append(f"💡 {unestimated} 项未估时")
         self.stats_label.setText("  ·  ".join(parts))
+
+        if total_minutes > OVERLOAD_THRESHOLD_MIN:
+            self.stats_label.setStyleSheet(
+                "color: #FFB454; font-weight: 600;"
+            )
+        elif unestimated > 0:
+            self.stats_label.setStyleSheet(
+                f"color: {SUBTEXT_COLOR_HEX};"
+            )
+        else:
+            self.stats_label.setStyleSheet("")
 
         self.progress_bar.setRange(0, max(total, 1))
         self.progress_bar.setValue(done)

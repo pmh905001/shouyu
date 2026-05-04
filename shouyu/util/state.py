@@ -81,6 +81,24 @@ class AppState:
         return int(cls.get('streak_days', 0) or 0)
 
     @classmethod
+    def increment_today_counter(cls, key: str) -> int:
+        """Bump a date-scoped counter. Stored as `<key>:YYYY-MM-DD`."""
+        today = cls.today_str()
+        full_key = f'{key}:{today}'
+        with cls._lock:
+            data = cls._load()
+            current = int(data.get(full_key, 0) or 0) + 1
+            data[full_key] = current
+            cls._save()
+            return current
+
+    @classmethod
+    def get_today_counter(cls, key: str) -> int:
+        today = cls.today_str()
+        full_key = f'{key}:{today}'
+        return int(cls.get(full_key, 0) or 0)
+
+    @classmethod
     def update_ritual_streak(cls) -> int:
         """Mark today's ritual as completed and return the resulting streak length.
 

@@ -25,9 +25,9 @@ from typing import List, Optional
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QAbstractItemView,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -46,6 +46,7 @@ from shouyu.service.plan import (
     PlanTask,
     TaskStatus,
 )
+from shouyu.view.duration_dialog import DurationPickerDialog
 from shouyu.view.styles import (
     ACCENT_COLOR_HEX,
     DONE_COLOR_HEX,
@@ -238,6 +239,8 @@ class TodoPanel(QWidget):
         self.list_widget.itemChanged.connect(self._on_item_text_edited)
         self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
         self.list_widget.model().rowsMoved.connect(self._on_rows_moved)
+        # Excel-like Enter behavior — see HabitDialog._on_editor_closed for details.
+        self.list_widget.itemDelegate().closeEditor.connect(self._on_editor_closed)
         self.task_stack.addWidget(self.list_widget)
 
         self.empty_label = QLabel("🎉  没有任务了\n按 Ctrl+ + 添加或在上方输入框快速创建")
@@ -281,11 +284,11 @@ class TodoPanel(QWidget):
         layout.addLayout(button_row)
 
     def _install_shortcuts(self) -> None:
-        bindings = [
+        # Window-wide shortcuts (NOT plain Return/Enter — those need to reach the
+        # inline editor when one is open).
+        window_bindings = [
             ("Space", self._cycle_selected_status),
             ("F2", self._edit_selected),
-            ("Return", self._edit_selected),
-            ("Enter", self._edit_selected),
             ("Alt+Up", lambda: self._move_selected(-1)),
             ("Alt+Down", lambda: self._move_selected(1)),
             ("Ctrl++", self._add_new_task),
@@ -298,10 +301,17 @@ class TodoPanel(QWidget):
             ("Esc", self._save_and_close),
             ("Escape", self._save_and_close),
         ]
-        for sequence, callback in bindings:
+        for sequence, callback in window_bindings:
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(callback)
+
+        # Plain Enter only fires when the list itself has focus (not its editor),
+        # so the inline editor can naturally consume Enter to commit.
+        for sequence in ("Return", "Enter"):
+            sc = QShortcut(QKeySequence(sequence), self.list_widget)
+            sc.setContext(Qt.WidgetShortcut)
+            sc.activated.connect(self._edit_selected)
 
     # ---------- list helpers ----------
 
@@ -343,16 +353,24 @@ class TodoPanel(QWidget):
         self.list_widget.blockSignals(False)
 
     def _on_item_text_edited(self, item: QListWidgetItem) -> None:
+        """Sync data only; cursor advance is driven by `_on_editor_closed`."""
         index = self.list_widget.row(item)
         if 0 <= index < len(self._tasks):
             self._tasks[index].text = self._strip_glyph(item.text())
             self._refresh_item(index)
             self._update_stats()
 
+    def _on_editor_closed(self, _editor, hint) -> None:
+        if hint == QAbstractItemDelegate.EndEditHint.RevertModelCache:
+            return
+        QTimer.singleShot(0, self._advance_editing_after_commit)
+
+    def _advance_editing_after_commit(self) -> None:
+        index = self._selected_index()
         next_row = index + 1
         if next_row < self.list_widget.count():
             self.list_widget.setCurrentRow(next_row)
-            QTimer.singleShot(0, lambda r=next_row: self._edit_row(r))
+            self._edit_row(next_row)
         elif (
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
@@ -362,7 +380,7 @@ class TodoPanel(QWidget):
             self._reload_list_widget()
             self.list_widget.setCurrentRow(new_row)
             self._update_stats()
-            QTimer.singleShot(0, lambda r=new_row: self._edit_row(r))
+            self._edit_row(new_row)
 
     @staticmethod
     def _strip_glyph(text: str) -> str:
@@ -478,16 +496,12 @@ class TodoPanel(QWidget):
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
-        value, ok = QInputDialog.getInt(
-            self,
-            "设置预计时长",
-            f"为「{task.text or '（空任务）'}」设置时长（分钟，0 表示清除）：",
-            value=task.duration_minutes,
-            minValue=0,
-            maxValue=480,
-            step=5,
+        value = DurationPickerDialog.get_duration(
+            current=task.duration_minutes,
+            task_text=task.text or '（空任务）',
+            parent=self,
         )
-        if not ok:
+        if value < 0:
             return
         task.duration_minutes = value
         self._refresh_item(index)
@@ -539,12 +553,28 @@ class TodoPanel(QWidget):
         done = sum(1 for t in self._tasks if t.status == TaskStatus.DONE)
         in_progress = sum(1 for t in self._tasks if t.status == TaskStatus.IN_PROGRESS)
         total_minutes = sum(t.duration_minutes for t in self._tasks if t.duration_minutes > 0)
+        OVERLOAD_THRESHOLD_MIN = 360
+        unestimated = sum(
+            1
+            for t in self._tasks
+            if (t.text or '').strip() and t.duration_minutes <= 0
+        )
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
         if total_minutes:
-            parts.append(f"≈ {total_minutes}m 估时")
+            hours = total_minutes / 60
+            if total_minutes > OVERLOAD_THRESHOLD_MIN:
+                parts.append(f"⚠ 预计 {hours:.1f}h 超载")
+            else:
+                parts.append(f"≈ {hours:.1f}h 已估时")
+        if unestimated > 0:
+            parts.append(f"💡 {unestimated} 项未估时")
         self.stats_label.setText("  ·  ".join(parts))
+        if total_minutes > OVERLOAD_THRESHOLD_MIN:
+            self.stats_label.setStyleSheet("color: #FFB454; font-weight: 600;")
+        else:
+            self.stats_label.setStyleSheet("")
         self.progress_bar.setRange(0, max(total, 1))
         self.progress_bar.setValue(done)
 
