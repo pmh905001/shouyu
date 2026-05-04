@@ -38,6 +38,25 @@ class TaskStatus(str, Enum):
     DONE = "done"
 
 
+class TaskPriority(str, Enum):
+    """Eisenhower-ish priority. NONE means "not yet decided"."""
+
+    NONE = ""
+    P1 = "P1"  # must-do today (will hurt if skipped)
+    P2 = "P2"  # should-do (high value, recoverable if skipped)
+    P3 = "P3"  # nice-to-have
+
+    @classmethod
+    def from_value(cls, raw) -> "TaskPriority":
+        if raw is None:
+            return cls.NONE
+        text = str(raw).strip().upper()
+        for member in (cls.P1, cls.P2, cls.P3):
+            if text == member.value:
+                return member
+        return cls.NONE
+
+
 # openpyxl exposes colors as ARGB hex strings ("00RRGGBB") in most cases.
 PENDING_COLOR = "FF808080"
 IN_PROGRESS_COLOR = "FFC00000"
@@ -47,6 +66,7 @@ PLAN_HEADER_CELL = "A1"
 PLAN_HEADER_TEXT = "plan"
 PLAN_TASK_COLUMN = "B"
 PLAN_DURATION_COLUMN = "C"
+PLAN_PRIORITY_COLUMN = "D"
 PLAN_FIRST_TASK_ROW = 2
 
 ACTIVE_TASK_COLUMN = "A"
@@ -93,6 +113,7 @@ class PlanTask:
     status: TaskStatus = TaskStatus.PENDING
     row: int = 0  # 0 means "not yet placed in Excel"
     duration_minutes: int = 0  # 0 means not specified
+    priority: TaskPriority = TaskPriority.NONE
 
     def display_text(self) -> str:
         return self.text or ""
@@ -149,12 +170,16 @@ class PlanService:
                 stripped = duration_value.strip().rstrip("m")
                 if stripped.isdigit():
                     duration = int(stripped)
+            priority = TaskPriority.from_value(
+                self.ws[f"{PLAN_PRIORITY_COLUMN}{row}"].value
+            )
             tasks.append(
                 PlanTask(
                     text=str(value),
                     status=_status_from_cell(cell),
                     row=row,
                     duration_minutes=duration,
+                    priority=priority,
                 )
             )
             row += 1
@@ -175,10 +200,12 @@ class PlanService:
             text_cell.font = _font_for(task.status)
             duration_cell = self.ws[f"{PLAN_DURATION_COLUMN}{row}"]
             duration_cell.value = task.duration_minutes if task.duration_minutes > 0 else None
+            priority_cell = self.ws[f"{PLAN_PRIORITY_COLUMN}{row}"]
+            priority_cell.value = task.priority.value if task.priority != TaskPriority.NONE else None
             task.row = row
 
         for row in range(PLAN_FIRST_TASK_ROW + len(tasks), max_row_to_clear + 1):
-            for column in (PLAN_TASK_COLUMN, PLAN_DURATION_COLUMN):
+            for column in (PLAN_TASK_COLUMN, PLAN_DURATION_COLUMN, PLAN_PRIORITY_COLUMN):
                 cell = self.ws[f"{column}{row}"]
                 cell.value = None
                 cell.font = Font()

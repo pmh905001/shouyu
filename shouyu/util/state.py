@@ -80,6 +80,24 @@ class AppState:
     def streak_days(cls) -> int:
         return int(cls.get('streak_days', 0) or 0)
 
+    # ---------- pomodoro mode ----------
+
+    POMODORO_MODE_CLASSIC = 'classic'
+    POMODORO_MODE_DEEP = 'deep'
+
+    @classmethod
+    def pomodoro_mode(cls) -> str:
+        mode = cls.get('pomodoro_mode', cls.POMODORO_MODE_CLASSIC)
+        if mode not in (cls.POMODORO_MODE_CLASSIC, cls.POMODORO_MODE_DEEP):
+            return cls.POMODORO_MODE_CLASSIC
+        return mode
+
+    @classmethod
+    def set_pomodoro_mode(cls, mode: str) -> None:
+        if mode not in (cls.POMODORO_MODE_CLASSIC, cls.POMODORO_MODE_DEEP):
+            mode = cls.POMODORO_MODE_CLASSIC
+        cls.set('pomodoro_mode', mode)
+
     @classmethod
     def increment_today_counter(cls, key: str) -> int:
         """Bump a date-scoped counter. Stored as `<key>:YYYY-MM-DD`."""

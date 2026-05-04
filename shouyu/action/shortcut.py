@@ -175,6 +175,12 @@ class Shortcut:
         PomodoroService.instance().toggle()
 
     @classmethod
+    def show_backup_restore(cls):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_backup_restore()
+
+    @classmethod
     def _add_hot_key_from_config(cls, key, fun, args=(), is_in_queue=True):
         short_key = Config.get_shortcut(key)
         if short_key:
@@ -210,6 +216,7 @@ class Shortcut:
         cls._add_hot_key_from_config('show_todo', cls.show_todo_panel, is_in_queue=False)
         cls._add_hot_key_from_config('show_habits', cls.show_habit_dialog, is_in_queue=False)
         cls._add_hot_key_from_config('toggle_pomodoro', cls.toggle_pomodoro, is_in_queue=False)
+        cls._add_hot_key_from_config('restore_backup', cls.show_backup_restore, is_in_queue=False)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)

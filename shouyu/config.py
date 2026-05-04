@@ -82,6 +82,30 @@ class Config:
     def pomodoro_notify_sound(cls):
         return cls.get('notify_sound', 'true', 'pomodoro').strip().lower() == 'true'
 
+    @classmethod
+    def pomodoro_deep_work_minutes(cls):
+        """Work duration when running in 'deep' mode (default 90)."""
+        return int(cls.get('deep_work_minutes', '90', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_deep_short_break_minutes(cls):
+        return int(cls.get('deep_short_break_minutes', '15', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_deep_long_break_minutes(cls):
+        return int(cls.get('deep_long_break_minutes', '30', 'pomodoro'))
+
+    @classmethod
+    def auto_prompt_duration_for_new_tasks(cls):
+        """When you finish typing a brand-new task, pop up the duration picker
+        so you commit to a time budget before moving on. Defaults to true."""
+        return cls.get('auto_prompt_duration', 'true', 'planning').strip().lower() == 'true'
+
+    @classmethod
+    def overload_threshold_minutes(cls):
+        """Total estimated minutes per day above which we show the overload warning."""
+        return int(cls.get('overload_threshold_minutes', '360', 'planning'))
+
 
 if __name__ == '__main__':
     print(Config.get('excel_path', 'kb.xlsx'))

@@ -2,7 +2,9 @@ import glob
 import logging
 import os
 import shutil
-from typing import List, Union
+from io import BytesIO
+from typing import List, Optional, Union
+from zipfile import BadZipFile
 
 import math
 import openpyxl
@@ -28,16 +30,87 @@ class KbExcel:
     def __init__(self, excel_path=None):
         self._excel_path = excel_path or Config.excel_path()
         self._worksheet_name = time.strftime('%Y-%m-%d')
+        # Track whether we had to recover from backup so the caller can warn UX-side.
+        self._recovered_from_backup: Optional[str] = None
         self._workbook: Workbook = self._load_workbook()
         self._changed = False
         self._pop_up_msgs = None
 
     def _load_workbook(self) -> Workbook:
         if not os.path.exists(self._excel_path):
-            workbook = openpyxl.Workbook()
-        else:
+            return openpyxl.Workbook()
+
+        try:
             workbook = openpyxl.load_workbook(self._excel_path)
+        except (KeyError, BadZipFile, ValueError) as e:
+            # Common corruption signature is `KeyError: '[Content_Types].xml'`
+            # caused by a previous in-place save being interrupted. Try to
+            # recover automatically from the most recent good backup so the
+            # user is never locked out of their own data.
+            logging.error(
+                f"main Excel file looks corrupt ({e}); attempting backup recovery"
+            )
+            workbook = self._recover_from_backup()
+            if workbook is None:
+                logging.warning(
+                    "no usable backup found; starting from a fresh empty workbook"
+                )
+                workbook = openpyxl.Workbook()
+
+        # See `_materialize_images` docstring for why this is critical.
+        self._materialize_images(workbook)
         return workbook
+
+    def _recover_from_backup(self) -> Optional[Workbook]:
+        """Walk backups newest-first, return the first one that opens cleanly."""
+        for backup in self.list_backups(self._excel_path):
+            try:
+                wb = openpyxl.load_workbook(backup)
+                self._recovered_from_backup = backup
+                logging.warning(f"auto-recovered workbook from backup: {backup}")
+                return wb
+            except Exception:
+                logging.warning(f"backup is also unreadable, trying next: {backup}")
+                continue
+        return None
+
+    @staticmethod
+    def _materialize_images(workbook: Workbook) -> None:
+        """Copy every image's bytes into an in-memory BytesIO right after load.
+
+        openpyxl stores image refs as `ZipExtFile` objects bound to the
+        workbook's underlying zip archive. That archive is closed (or GC'd)
+        at unpredictable times. The next save then explodes with
+        `ValueError: I/O operation on closed file.` partway through writing
+        the new xlsx — leaving the destination half-written and corrupt.
+
+        Materializing once on load decouples image data from the loaded zip
+        handle, so subsequent saves are safe.
+        """
+        for ws in workbook.worksheets:
+            images = getattr(ws, "_images", None) or []
+            for img in list(images):
+                try:
+                    ref = getattr(img, "ref", None)
+                    if ref is None:
+                        continue
+                    if isinstance(ref, (str, bytes, BytesIO)):
+                        continue
+                    if hasattr(ref, "read"):
+                        try:
+                            ref.seek(0)
+                        except Exception:
+                            pass
+                        data = ref.read()
+                        if data:
+                            img.ref = BytesIO(data)
+                except Exception:
+                    logging.exception("failed to materialize image into memory")
+
+    @property
+    def recovered_from_backup(self) -> Optional[str]:
+        """Path of the backup we auto-recovered from, or None for a normal load."""
+        return self._recovered_from_backup
 
     @property
     def _active_worksheet(self) -> Worksheet:
@@ -226,9 +299,118 @@ class KbExcel:
             logging.info(f'removed old backup: {oldest}')
 
     def _save_changed(self):
-        if self._changed:
-            self._backup_excel()
-            self._workbook.save(self._excel_path)
+        if not self._changed:
+            return
+        self._backup_excel()
+        self._atomic_save()
+        # If we recovered from backup and just persisted the recovered workbook
+        # back to the canonical path, we're back in sync — clear the flag so
+        # subsequent saves don't keep flagging recovery in stats.
+        if self._recovered_from_backup is not None:
+            logging.info(
+                f"persisted recovered workbook back to {self._excel_path}; "
+                f"original recovery source was {self._recovered_from_backup}"
+            )
+            self._recovered_from_backup = None
+
+    def _atomic_save(self) -> None:
+        """Save to a temp file then atomically replace the original.
+
+        If save fails midway (PermissionError, the openpyxl image bug, anything),
+        the original file stays untouched. This is the single most important
+        safety net — without it a partial save corrupts the canonical Excel.
+        """
+        excel_dir = os.path.dirname(self._excel_path) or '.'
+        name, ext = os.path.splitext(os.path.basename(self._excel_path))
+        tmp_path = os.path.join(excel_dir, f'.{name}.tmp_{os.getpid()}{ext}')
+        try:
+            self._workbook.save(tmp_path)
+        except Exception:
+            # Clean up the half-written tmp file before re-raising.
+            self._safe_remove(tmp_path)
+            raise
+        # save succeeded; flip the canonical file in one OS call.
+        try:
+            os.replace(tmp_path, self._excel_path)
+        except PermissionError:
+            # The canonical file is currently locked (most often: the user has
+            # opened it in MS Excel / WPS). The new content is sitting safely
+            # in tmp_path — we keep it on disk so the user can recover it.
+            kept = os.path.join(
+                excel_dir,
+                f'{name}.unsaved_{time.strftime("%Y%m%d_%H%M%S")}{ext}',
+            )
+            try:
+                os.replace(tmp_path, kept)
+                logging.error(
+                    f"target Excel is locked; pending changes preserved at: {kept}"
+                )
+            except Exception:
+                self._safe_remove(tmp_path)
+                logging.exception("failed to preserve unsaved changes")
+            raise
+
+    @staticmethod
+    def _safe_remove(path: str) -> None:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            logging.exception(f"failed to remove temp file: {path}")
+
+    @staticmethod
+    def list_backups(excel_path: str) -> List[str]:
+        """Return all `*_backup_*.xlsx` files for `excel_path`, newest first."""
+        if not excel_path:
+            return []
+        excel_dir = os.path.dirname(excel_path) or '.'
+        name, ext = os.path.splitext(os.path.basename(excel_path))
+        pattern = os.path.join(excel_dir, f'{name}_backup_*{ext}')
+        try:
+            return sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        except Exception:
+            logging.exception("failed to list backups")
+            return []
+
+    @classmethod
+    def restore_from_backup(cls, backup_path: str, excel_path: Optional[str] = None) -> str:
+        """Restore the canonical Excel file from `backup_path`.
+
+        Before overwriting, the *current* canonical file (which the user might
+        still want — e.g. if they picked the wrong backup) is itself backed up
+        with a `pre_restore_<ts>` suffix so this operation is reversible.
+
+        Returns the pre-restore safety-backup path (empty string if none).
+        Raises on failure.
+        """
+        target = excel_path or Config.excel_path()
+        if not backup_path or not os.path.isfile(backup_path):
+            raise FileNotFoundError(f"backup not found: {backup_path}")
+
+        # Validate the backup actually opens before we touch anything.
+        try:
+            openpyxl.load_workbook(backup_path).close()
+        except Exception as e:
+            raise RuntimeError(f"backup file is itself unreadable: {e}") from e
+
+        safety_path = ''
+        if os.path.exists(target):
+            target_dir = os.path.dirname(target) or '.'
+            tname, text = os.path.splitext(os.path.basename(target))
+            safety_path = os.path.join(
+                target_dir,
+                f'{tname}.pre_restore_{time.strftime("%Y%m%d_%H%M%S")}{text}',
+            )
+            try:
+                shutil.copy2(target, safety_path)
+                logging.info(f"pre-restore safety copy saved to: {safety_path}")
+            except Exception:
+                logging.exception("failed to take pre-restore safety copy")
+                safety_path = ''
+
+        shutil.copy2(backup_path, target)
+        logging.info(f"restored Excel from backup: {backup_path} -> {target}")
+        return safety_path
 
     @staticmethod
     def _generate_move_message(column_index: int, steps: int):

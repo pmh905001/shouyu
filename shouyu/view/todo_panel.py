@@ -41,9 +41,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from shouyu.config import Config
 from shouyu.service.plan import (
     DEFAULT_PLAN_TASKS,
     PlanTask,
+    TaskPriority,
     TaskStatus,
 )
 from shouyu.view.duration_dialog import DurationPickerDialog
@@ -74,12 +76,21 @@ _NEXT_STATUS = {
     TaskStatus.DONE: TaskStatus.PENDING,
 }
 
+_PRIORITY_BADGE = {
+    TaskPriority.P1: "🔴 P1",
+    TaskPriority.P2: "🟡 P2",
+    TaskPriority.P3: "⚪ P3",
+}
+
 _TASK_ROLE = Qt.UserRole + 1
 
 
 def _format_item(task: PlanTask) -> str:
     glyph = _STATUS_GLYPH.get(task.status, "○")
     parts = [glyph, "  ", task.text or ""]
+    badge = _PRIORITY_BADGE.get(task.priority)
+    if badge:
+        parts.append(f"   {badge}")
     if task.duration_minutes:
         parts.append(f"   ⏱ {task.duration_minutes}m")
     if task.status == TaskStatus.IN_PROGRESS:
@@ -144,6 +155,7 @@ class TodoPanel(QWidget):
         self._tasks: List[PlanTask] = []
         self._original_in_progress: Optional[str] = None
         self._save_already_dispatched = False
+        self._pending_duration_prompt: set = set()
 
         self._build_ui()
         self._install_shortcuts()
@@ -212,8 +224,9 @@ class TodoPanel(QWidget):
         layout.addWidget(self.progress_bar)
 
         hint = QLabel(
-            "↑↓ 选择 ·  F2 / 回车 编辑 ·  Space 切换状态 ·  Alt+↑↓ 重排 ·  拖拽排序 ·  "
-            "Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  Ctrl+L 快速添加 ·  Ctrl+P 专注 ·  右键查看更多"
+            "↑↓ 选择 ·  F2 / 回车 编辑 ·  Space 切换状态 ·  Alt+↑↓ 重排 ·  "
+            "Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  Ctrl+L 快速添加 ·  Ctrl+P 专注 ·  "
+            "右键 → 优先级 / 时长"
         )
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
@@ -367,6 +380,26 @@ class TodoPanel(QWidget):
 
     def _advance_editing_after_commit(self) -> None:
         index = self._selected_index()
+
+        # See HabitDialog._advance_editing_after_commit for the rationale.
+        if 0 <= index < len(self._tasks):
+            task = self._tasks[index]
+            should_prompt = (
+                Config.auto_prompt_duration_for_new_tasks()
+                and id(task) in self._pending_duration_prompt
+                and (task.text or "").strip()
+                and task.duration_minutes <= 0
+            )
+            self._pending_duration_prompt.discard(id(task))
+            if should_prompt:
+                value = DurationPickerDialog.get_duration(
+                    current=30, task_text=task.text, parent=self
+                )
+                if value > 0:
+                    task.duration_minutes = value
+                    self._refresh_item(index)
+                    self._update_stats()
+
         next_row = index + 1
         if next_row < self.list_widget.count():
             self.list_widget.setCurrentRow(next_row)
@@ -375,7 +408,9 @@ class TodoPanel(QWidget):
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
         ):
-            self._tasks.append(PlanTask(text="", status=TaskStatus.PENDING))
+            new_task = PlanTask(text="", status=TaskStatus.PENDING)
+            self._pending_duration_prompt.add(id(new_task))
+            self._tasks.append(new_task)
             new_row = len(self._tasks) - 1
             self._reload_list_widget()
             self.list_widget.setCurrentRow(new_row)
@@ -390,10 +425,13 @@ class TodoPanel(QWidget):
                 text = text[len(glyph):]
                 break
         text = text.lstrip()
-        for marker in ("   🎯", "   ⏱"):
+        first_marker = -1
+        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪"):
             idx = text.find(marker)
-            if idx >= 0:
-                text = text[:idx]
+            if idx >= 0 and (first_marker < 0 or idx < first_marker):
+                first_marker = idx
+        if first_marker >= 0:
+            text = text[:first_marker]
         return text.strip()
 
     def _edit_selected(self) -> None:
@@ -434,6 +472,7 @@ class TodoPanel(QWidget):
 
     def _add_new_task(self, text: str = "") -> None:
         new_task = PlanTask(text=text, status=TaskStatus.PENDING)
+        self._pending_duration_prompt.add(id(new_task))
         index = self._selected_index()
         if 0 <= index < len(self._tasks):
             self._tasks.insert(index + 1, new_task)
@@ -483,6 +522,12 @@ class TodoPanel(QWidget):
             menu.addAction("切换状态  (Space)", self._cycle_selected_status)
             menu.addAction("🍅 专注此项  (Ctrl+P)", self._focus_pomodoro_on_selected)
             menu.addAction("⏱ 设置时长…", self._set_duration_for_selected)
+            priority_menu = menu.addMenu("🚦 优先级")
+            priority_menu.addAction("🔴 P1  必做", lambda: self._set_priority(TaskPriority.P1))
+            priority_menu.addAction("🟡 P2  应做", lambda: self._set_priority(TaskPriority.P2))
+            priority_menu.addAction("⚪ P3  可做", lambda: self._set_priority(TaskPriority.P3))
+            priority_menu.addSeparator()
+            priority_menu.addAction("清除优先级", lambda: self._set_priority(TaskPriority.NONE))
             menu.addAction("上移  (Alt+↑)", lambda: self._move_selected(-1))
             menu.addAction("下移  (Alt+↓)", lambda: self._move_selected(1))
             menu.addSeparator()
@@ -490,6 +535,14 @@ class TodoPanel(QWidget):
         if item is not None:
             menu.addAction("删除任务  (Ctrl+ −)", self._delete_selected)
         menu.exec(self.list_widget.mapToGlobal(pos))
+
+    def _set_priority(self, priority: TaskPriority) -> None:
+        index = self._selected_index()
+        if not (0 <= index < len(self._tasks)):
+            return
+        self._tasks[index].priority = priority
+        self._refresh_item(index)
+        self._update_stats()
 
     def _set_duration_for_selected(self) -> None:
         index = self._selected_index()
@@ -516,10 +569,20 @@ class TodoPanel(QWidget):
         if not text:
             return
         self.quick_add.clear()
-        self._tasks.append(PlanTask(text=text, status=TaskStatus.PENDING))
+        new_task = PlanTask(text=text, status=TaskStatus.PENDING)
+        self._tasks.append(new_task)
         self._reload_list_widget()
-        self.list_widget.setCurrentRow(len(self._tasks) - 1)
+        new_row = len(self._tasks) - 1
+        self.list_widget.setCurrentRow(new_row)
         self._update_stats()
+        if Config.auto_prompt_duration_for_new_tasks():
+            value = DurationPickerDialog.get_duration(
+                current=30, task_text=text, parent=self
+            )
+            if value > 0:
+                new_task.duration_minutes = value
+                self._refresh_item(new_row)
+                self._update_stats()
 
     def _focus_pomodoro_on_selected(self) -> None:
         index = self._selected_index()
@@ -553,25 +616,31 @@ class TodoPanel(QWidget):
         done = sum(1 for t in self._tasks if t.status == TaskStatus.DONE)
         in_progress = sum(1 for t in self._tasks if t.status == TaskStatus.IN_PROGRESS)
         total_minutes = sum(t.duration_minutes for t in self._tasks if t.duration_minutes > 0)
-        OVERLOAD_THRESHOLD_MIN = 360
+        try:
+            overload_threshold = Config.overload_threshold_minutes()
+        except Exception:
+            overload_threshold = 360
         unestimated = sum(
             1
             for t in self._tasks
             if (t.text or '').strip() and t.duration_minutes <= 0
         )
+        p1_count = sum(1 for t in self._tasks if t.priority == TaskPriority.P1)
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
+        if p1_count:
+            parts.append(f"🔴 {p1_count} 项 P1")
         if total_minutes:
             hours = total_minutes / 60
-            if total_minutes > OVERLOAD_THRESHOLD_MIN:
+            if total_minutes > overload_threshold:
                 parts.append(f"⚠ 预计 {hours:.1f}h 超载")
             else:
                 parts.append(f"≈ {hours:.1f}h 已估时")
         if unestimated > 0:
             parts.append(f"💡 {unestimated} 项未估时")
         self.stats_label.setText("  ·  ".join(parts))
-        if total_minutes > OVERLOAD_THRESHOLD_MIN:
+        if total_minutes > overload_threshold:
             self.stats_label.setStyleSheet("color: #FFB454; font-weight: 600;")
         else:
             self.stats_label.setStyleSheet("")
@@ -595,6 +664,7 @@ class TodoPanel(QWidget):
                 status=t.status,
                 row=t.row,
                 duration_minutes=t.duration_minutes,
+                priority=t.priority,
             )
             for t in self._tasks
         ]

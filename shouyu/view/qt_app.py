@@ -20,6 +20,7 @@ class _QtBridge(QObject):
     show_todo_signal = Signal()
     show_habit_signal = Signal(list)
     pomodoro_event_signal = Signal(str, str)
+    show_backup_signal = Signal(str)  # payload = path of auto-recovered backup, or ""
     quit_signal = Signal()
 
     @Slot()
@@ -55,6 +56,16 @@ class _QtBridge(QObject):
         except Exception:
             logging.exception("failed to dispatch pomodoro event")
 
+    @Slot(str)
+    def _on_show_backup(self, recovered_from: str) -> None:
+        try:
+            from shouyu.view.backup_dialog import BackupRestoreDialog
+
+            dialog = BackupRestoreDialog.get_or_create()
+            dialog.show_centered(recovered_from=recovered_from or None)
+        except Exception:
+            logging.exception("failed to show backup restore dialog")
+
     @Slot()
     def _on_quit(self) -> None:
         app = QApplication.instance()
@@ -86,6 +97,7 @@ class QtApp:
             cls._bridge.show_todo_signal.connect(cls._bridge._on_show_todo, Qt.QueuedConnection)
             cls._bridge.show_habit_signal.connect(cls._bridge._on_show_habit, Qt.QueuedConnection)
             cls._bridge.pomodoro_event_signal.connect(cls._bridge._on_pomodoro_event, Qt.QueuedConnection)
+            cls._bridge.show_backup_signal.connect(cls._bridge._on_show_backup, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
         finally:
             cls._ready.set()
@@ -119,6 +131,13 @@ class QtApp:
         if cls._bridge is None:
             return
         cls._bridge.pomodoro_event_signal.emit(event, payload)
+
+    @classmethod
+    def show_backup_restore(cls, recovered_from: str = "") -> None:
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot show backup restore dialog")
+            return
+        cls._bridge.show_backup_signal.emit(recovered_from or "")
 
     @classmethod
     def quit(cls) -> None:

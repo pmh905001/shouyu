@@ -58,6 +58,9 @@ class PomodoroService:
                 cls._instance = PomodoroService()
             return cls._instance
 
+    MODE_CLASSIC = 'classic'
+    MODE_DEEP = 'deep'
+
     def __init__(self) -> None:
         self._phase = Phase.IDLE
         self._phase_before_pause: Optional[Phase] = None
@@ -70,6 +73,14 @@ class PomodoroService:
         self._timer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._state_lock = threading.RLock()
+        # Restore last-used mode (classic / deep) so it persists across launches.
+        self._mode: str = self.MODE_CLASSIC
+        try:
+            from shouyu.util.state import AppState
+
+            self._mode = AppState.pomodoro_mode()
+        except Exception:
+            logging.exception("failed to read pomodoro mode from state")
 
     # ---------- public API ----------
 
@@ -136,6 +147,30 @@ class PomodoroService:
         self._emit("extended", str(minutes))
         return True
 
+    def mode(self) -> str:
+        with self._state_lock:
+            return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        """Switch between classic (25/5) and deep (90/15) durations.
+
+        Only takes effect on the next phase — we don't retroactively shrink
+        a phase the user is already in.
+        """
+        if mode not in (self.MODE_CLASSIC, self.MODE_DEEP):
+            mode = self.MODE_CLASSIC
+        with self._state_lock:
+            if self._mode == mode:
+                return
+            self._mode = mode
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.set_pomodoro_mode(mode)
+        except Exception:
+            logging.exception("failed to persist pomodoro mode")
+        self._emit("mode_changed", mode)
+
     def skip_break(self) -> bool:
         """Skip the current break and start a new work phase. Logged in stats."""
         with self._state_lock:
@@ -185,12 +220,24 @@ class PomodoroService:
         )
 
     def _duration_for(self, phase: Phase) -> int:
+        deep = self._mode == self.MODE_DEEP
         if phase == Phase.WORKING:
-            return Config.pomodoro_work_minutes() * 60
+            mins = Config.pomodoro_deep_work_minutes() if deep else Config.pomodoro_work_minutes()
+            return mins * 60
         if phase == Phase.SHORT_BREAK:
-            return Config.pomodoro_short_break_minutes() * 60
+            mins = (
+                Config.pomodoro_deep_short_break_minutes()
+                if deep
+                else Config.pomodoro_short_break_minutes()
+            )
+            return mins * 60
         if phase == Phase.LONG_BREAK:
-            return Config.pomodoro_long_break_minutes() * 60
+            mins = (
+                Config.pomodoro_deep_long_break_minutes()
+                if deep
+                else Config.pomodoro_long_break_minutes()
+            )
+            return mins * 60
         return 0
 
     def _refresh_current_task_text_locked(self) -> None:
@@ -253,7 +300,11 @@ class PomodoroService:
 
         try:
             now = time.time()
-            duration_min = Config.pomodoro_work_minutes()
+            duration_min = (
+                Config.pomodoro_deep_work_minutes()
+                if self._mode == self.MODE_DEEP
+                else Config.pomodoro_work_minutes()
+            )
             started_at = self._current_task_started_at or (now - duration_min * 60)
             label = (
                 f"🍅 {duration_min}min @"

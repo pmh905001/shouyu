@@ -72,6 +72,22 @@ def _show_habit_dialog_if_needed():
     QtApp.show_habit_dialog(habits)
 
 
+def _alert_if_excel_was_recovered():
+    """If the canonical Excel was corrupt at startup and we auto-recovered
+    from a backup, surface that to the user immediately so they can pick a
+    different backup if they don't trust the one we picked."""
+    try:
+        excel = KbExcel()
+        if excel.recovered_from_backup:
+            logging.warning(
+                f"main Excel was corrupt at startup; auto-recovered from "
+                f"{excel.recovered_from_backup}"
+            )
+            QtApp.show_backup_restore(excel.recovered_from_backup)
+    except Exception:
+        logging.exception("failed to check Excel recovery status")
+
+
 def _start_pomodoro_if_enabled():
     if not Config.pomodoro_enabled():
         return
@@ -96,6 +112,8 @@ if __name__ == '__main__':
     Shortcut.register_hot_keys()
 
     # 在 Qt 就绪后弹出当日习惯提醒；如果开启了番茄工作法也一并启动。
+    # 启动健康检查放在最前 — 如果主 Excel 损坏，先让用户决定如何恢复。
+    threading.Timer(0.5, _alert_if_excel_was_recovered).start()
     threading.Timer(1.0, _show_habit_dialog_if_needed).start()
     threading.Timer(2.0, _start_pomodoro_if_enabled).start()
 

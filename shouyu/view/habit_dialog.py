@@ -53,9 +53,11 @@ from PySide6.QtWidgets import QLineEdit
 
 from shouyu.view.duration_dialog import DurationPickerDialog
 
+from shouyu.config import Config
 from shouyu.service.plan import (
     DEFAULT_PLAN_TASKS,
     PlanTask,
+    TaskPriority,
     TaskStatus,
 )
 from shouyu.util.state import AppState
@@ -88,12 +90,21 @@ _NEXT_STATUS = {
     TaskStatus.DONE: TaskStatus.PENDING,
 }
 
+_PRIORITY_BADGE = {
+    TaskPriority.P1: "🔴 P1",
+    TaskPriority.P2: "🟡 P2",
+    TaskPriority.P3: "⚪ P3",
+}
+
 _TASK_ROLE = Qt.UserRole + 1
 
 
 def _format(task: PlanTask) -> str:
     glyph = _GLYPH.get(task.status, "○")
     parts = [glyph, " ", task.text or ""]
+    badge = _PRIORITY_BADGE.get(task.priority)
+    if badge:
+        parts.append(f"   {badge}")
     if task.duration_minutes:
         parts.append(f"   ⏱ {task.duration_minutes}m")
     if task.status == TaskStatus.IN_PROGRESS:
@@ -190,7 +201,12 @@ def _read_yesterday_snapshot() -> dict:
         out["total"] = len(tasks)
         out["done"] = sum(1 for t in tasks if t.status == TaskStatus.DONE)
         out["unfinished"] = [
-            PlanTask(text=t.text, status=TaskStatus.PENDING, duration_minutes=t.duration_minutes)
+            PlanTask(
+                text=t.text,
+                status=TaskStatus.PENDING,
+                duration_minutes=t.duration_minutes,
+                priority=t.priority,
+            )
             for t in tasks
             if t.status != TaskStatus.DONE
         ]
@@ -223,6 +239,11 @@ class HabitDialog(QDialog):
         self._yesterday_unfinished: List[PlanTask] = []
         self._yesterday_checkboxes: List[QCheckBox] = []
         self._reflection_dirty = False
+        # Tracks Python id() of PlanTask objects we just created via the UI.
+        # Used so we can pop the duration picker exactly once after the user
+        # finishes typing the new task's name (rather than nagging on every edit).
+        self._pending_duration_prompt: set = set()
+        self._suppress_advance_once = False
 
         self._build_ui()
         self._install_shortcuts()
@@ -445,7 +466,7 @@ class HabitDialog(QDialog):
         hint = QLabel(
             "↑↓ 选择 ·  F2 / 回车 编辑（编辑中再按回车跳到下一项） ·  "
             "Space 切换状态 ·  Alt+↑↓ 重排 ·  Ctrl+ + 添加 ·  "
-            "Ctrl+ − 删除 ·  右键 → 设置时长"
+            "Ctrl+ − 删除 ·  右键 → 优先级 / 时长"
         )
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
@@ -512,6 +533,20 @@ class HabitDialog(QDialog):
         self.reflection_edit.setFixedHeight(96)
         self.reflection_edit.textChanged.connect(self._on_reflection_changed)
         layout.addWidget(self.reflection_edit)
+
+        # Day-end review: estimated vs actual (pomodoros). Hidden until there's
+        # data worth showing, so it doesn't clutter the morning view.
+        self.review_label = QLabel("")
+        self.review_label.setWordWrap(True)
+        self.review_label.setStyleSheet(
+            "padding: 8px 10px; "
+            "background-color: rgba(15, 98, 254, 0.08); "
+            "border: 1px solid rgba(15, 98, 254, 0.30); "
+            "border-radius: 6px; "
+            "font-size: 12px;"
+        )
+        self.review_label.setVisible(False)
+        layout.addWidget(self.review_label)
 
         return self.task_card
 
@@ -723,11 +758,15 @@ class HabitDialog(QDialog):
                 text = text[len(glyph):]
                 break
         text = text.lstrip()
-        # Strip trailing badges that we add ("⏱", "🎯") so user editing stays sane.
-        for marker in ("   🎯", "   ⏱"):
+        # Strip trailing badges that we add ("🔴", "⏱", "🎯") so user editing stays sane.
+        # Find earliest match — everything from there onwards is decoration.
+        first_marker = -1
+        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪"):
             idx = text.find(marker)
-            if idx >= 0:
-                text = text[:idx]
+            if idx >= 0 and (first_marker < 0 or idx < first_marker):
+                first_marker = idx
+        if first_marker >= 0:
+            text = text[:first_marker]
         return text.strip()
 
     def _on_item_text_edited(self, item: QListWidgetItem) -> None:
@@ -747,11 +786,43 @@ class HabitDialog(QDialog):
         if hint == QAbstractItemDelegate.EndEditHint.RevertModelCache:
             # User pressed Esc. Don't advance.
             return
+        if self._suppress_advance_once:
+            # Avoid runaway advance when we've just programmatically committed
+            # an edit (e.g. from the duration picker re-render).
+            self._suppress_advance_once = False
+            return
         # Defer so Qt finishes tearing down the previous editor first.
         QTimer.singleShot(0, self._advance_editing_after_commit)
 
     def _advance_editing_after_commit(self) -> None:
         index = self.list_widget.currentRow()
+
+        # If the task we just edited is brand new, has content, and still has
+        # no duration, give the user a chance to commit a time budget first.
+        # This is the one place where it's worth interrupting the Excel-like
+        # flow (it's literally what they asked for).
+        if 0 <= index < len(self._tasks):
+            task = self._tasks[index]
+            should_prompt = (
+                Config.auto_prompt_duration_for_new_tasks()
+                and id(task) in self._pending_duration_prompt
+                and (task.text or "").strip()
+                and task.duration_minutes <= 0
+            )
+            self._pending_duration_prompt.discard(id(task))
+            if should_prompt:
+                value = DurationPickerDialog.get_duration(
+                    current=30,  # Sensible default — most tasks are about 30min.
+                    task_text=task.text,
+                    parent=self,
+                )
+                if value > 0:
+                    task.duration_minutes = value
+                    self._refresh_item(index)
+                    self._update_stats()
+                # Whether user picked a duration or skipped, fall through to
+                # normal advance behavior below.
+
         next_row = index + 1
         if next_row < self.list_widget.count():
             self.list_widget.setCurrentRow(next_row)
@@ -760,7 +831,9 @@ class HabitDialog(QDialog):
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
         ):
-            self._tasks.append(PlanTask(text="", status=TaskStatus.PENDING))
+            new_task = PlanTask(text="", status=TaskStatus.PENDING)
+            self._pending_duration_prompt.add(id(new_task))
+            self._tasks.append(new_task)
             new_row = len(self._tasks) - 1
             self._render_tasks()
             self.list_widget.setCurrentRow(new_row)
@@ -825,6 +898,7 @@ class HabitDialog(QDialog):
 
     def _add_new_task(self, text: str = "") -> None:
         new_task = PlanTask(text=text, status=TaskStatus.PENDING)
+        self._pending_duration_prompt.add(id(new_task))
         index = self.list_widget.currentRow()
         if 0 <= index < len(self._tasks):
             self._tasks.insert(index + 1, new_task)
@@ -865,6 +939,12 @@ class HabitDialog(QDialog):
             menu.addAction("切换状态  (Space)", self._cycle_status)
             menu.addAction("🍅 专注此项  (Ctrl+P)", self._focus_pomodoro_on_selected)
             menu.addAction("⏱ 设置时长…", self._set_duration_for_selected)
+            priority_menu = menu.addMenu("🚦 优先级")
+            priority_menu.addAction("🔴 P1  必做", lambda: self._set_priority(TaskPriority.P1))
+            priority_menu.addAction("🟡 P2  应做", lambda: self._set_priority(TaskPriority.P2))
+            priority_menu.addAction("⚪ P3  可做", lambda: self._set_priority(TaskPriority.P3))
+            priority_menu.addSeparator()
+            priority_menu.addAction("清除优先级", lambda: self._set_priority(TaskPriority.NONE))
             menu.addAction("上移  (Alt+↑)", lambda: self._move(-1))
             menu.addAction("下移  (Alt+↓)", lambda: self._move(1))
             menu.addSeparator()
@@ -872,6 +952,14 @@ class HabitDialog(QDialog):
         if item is not None:
             menu.addAction("删除任务  (Ctrl+ −)", self._delete_selected)
         menu.exec(self.list_widget.mapToGlobal(pos))
+
+    def _set_priority(self, priority: TaskPriority) -> None:
+        index = self.list_widget.currentRow()
+        if not (0 <= index < len(self._tasks)):
+            return
+        self._tasks[index].priority = priority
+        self._refresh_item(index)
+        self._update_stats()
 
     def _set_duration_for_selected(self) -> None:
         index = self.list_widget.currentRow()
@@ -900,10 +988,21 @@ class HabitDialog(QDialog):
         if not text:
             return
         self.quick_add.clear()
-        self._tasks.append(PlanTask(text=text, status=TaskStatus.PENDING))
+        new_task = PlanTask(text=text, status=TaskStatus.PENDING)
+        self._tasks.append(new_task)
         self._render_tasks()
-        self.list_widget.setCurrentRow(len(self._tasks) - 1)
+        new_row = len(self._tasks) - 1
+        self.list_widget.setCurrentRow(new_row)
         self._update_stats()
+        # Quick-add already gave us the text — go straight to the duration picker.
+        if Config.auto_prompt_duration_for_new_tasks():
+            value = DurationPickerDialog.get_duration(
+                current=30, task_text=text, parent=self
+            )
+            if value > 0:
+                new_task.duration_minutes = value
+                self._refresh_item(new_row)
+                self._update_stats()
 
     # ---------- carry-over ----------
 
@@ -934,6 +1033,7 @@ class HabitDialog(QDialog):
                     text=task.text,
                     status=TaskStatus.PENDING,
                     duration_minutes=task.duration_minutes,
+                    priority=task.priority,
                 )
             )
             existing_texts.add(text)
@@ -995,20 +1095,25 @@ class HabitDialog(QDialog):
         done = sum(1 for t in self._tasks if t.status == TaskStatus.DONE)
         in_progress = sum(1 for t in self._tasks if t.status == TaskStatus.IN_PROGRESS)
         total_minutes = sum(t.duration_minutes for t in self._tasks if t.duration_minutes > 0)
-        # An estimate >6h on top of meetings/breaks is almost certainly overload.
-        OVERLOAD_THRESHOLD_MIN = 360
+        try:
+            overload_threshold = Config.overload_threshold_minutes()
+        except Exception:
+            overload_threshold = 360
         unestimated = sum(
             1
             for t in self._tasks
             if (t.text or '').strip() and t.duration_minutes <= 0
         )
+        p1_count = sum(1 for t in self._tasks if t.priority == TaskPriority.P1)
 
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
+        if p1_count:
+            parts.append(f"🔴 {p1_count} 项 P1")
         if total_minutes:
             hours = total_minutes / 60
-            if total_minutes > OVERLOAD_THRESHOLD_MIN:
+            if total_minutes > overload_threshold:
                 parts.append(f"⚠ 预计 {hours:.1f}h 超载")
             else:
                 parts.append(f"≈ {hours:.1f}h 已估时")
@@ -1016,7 +1121,7 @@ class HabitDialog(QDialog):
             parts.append(f"💡 {unestimated} 项未估时")
         self.stats_label.setText("  ·  ".join(parts))
 
-        if total_minutes > OVERLOAD_THRESHOLD_MIN:
+        if total_minutes > overload_threshold:
             self.stats_label.setStyleSheet(
                 "color: #FFB454; font-weight: 600;"
             )
@@ -1029,6 +1134,77 @@ class HabitDialog(QDialog):
 
         self.progress_bar.setRange(0, max(total, 1))
         self.progress_bar.setValue(done)
+        self._render_review()
+
+    def _render_review(self) -> None:
+        """Day-end estimated-vs-actual recap.
+
+        Compares total estimated minutes for tasks marked DONE against the
+        actual logged-pomodoro time for today. Only renders if there are
+        completed tasks AND at least one logged pomodoro (otherwise it's not
+        meaningful — too early in the day).
+        """
+        try:
+            from shouyu.service.excel import KbExcel
+            from shouyu.service.pomodoro import PomodoroService
+
+            pomodoros = KbExcel().plan_service().count_pomodoros_logged()
+        except Exception:
+            logging.exception("failed to compute day review")
+            self.review_label.setVisible(False)
+            return
+
+        done_tasks = [t for t in self._tasks if t.status == TaskStatus.DONE]
+        if not done_tasks or pomodoros <= 0:
+            self.review_label.setVisible(False)
+            return
+
+        try:
+            from shouyu.config import Config as _Config
+
+            mode = PomodoroService.instance().mode()
+            per_pomodoro_min = (
+                _Config.pomodoro_deep_work_minutes()
+                if mode == PomodoroService.MODE_DEEP
+                else _Config.pomodoro_work_minutes()
+            )
+        except Exception:
+            per_pomodoro_min = 25
+
+        estimated = sum(
+            t.duration_minutes for t in done_tasks if t.duration_minutes > 0
+        )
+        actual = pomodoros * per_pomodoro_min
+        skipped = AppState.get_today_counter('breaks_skipped')
+
+        lines = [
+            f"📊 <b>今日复盘</b> · 完成 {len(done_tasks)} 项 · "
+            f"番茄 {pomodoros} 个 ≈ {actual} 分钟"
+        ]
+        if estimated > 0:
+            diff = actual - estimated
+            pct = (diff / estimated) * 100 if estimated else 0
+            if abs(pct) < 15:
+                verdict = "👍 估时基本准确，继续保持"
+            elif diff > 0:
+                verdict = f"⏰ 实际比估时多 {diff} 分钟（{pct:+.0f}%），下次估保守一点"
+            else:
+                verdict = f"⚡ 实际比估时少 {-diff} 分钟（{pct:+.0f}%），可以多承接些任务"
+            lines.append(
+                f"已估时 {estimated} 分钟 vs 实际 {actual} 分钟 → {verdict}"
+            )
+        else:
+            lines.append("💡 完成的任务没有估时，明天试试在新建任务时给个时间预算")
+
+        if skipped >= 2:
+            lines.append(
+                f"☕ 今天跳了 {skipped} 次休息——长期看这会让下午效率掉。"
+                "明天试试至少老实休息一次。"
+            )
+
+        self.review_label.setText("<br>".join(lines))
+        self.review_label.setTextFormat(Qt.RichText)
+        self.review_label.setVisible(True)
 
     def _reset_action_buttons(self) -> None:
         self.start_btn.setEnabled(True)
@@ -1066,6 +1242,7 @@ class HabitDialog(QDialog):
                 status=t.status,
                 row=t.row,
                 duration_minutes=t.duration_minutes,
+                priority=t.priority,
             )
             for t in self._tasks
         ]

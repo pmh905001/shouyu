@@ -76,11 +76,12 @@ class PomodoroWindow(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setWindowFlag(Qt.Tool, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(280, 156)
+        self.setFixedSize(296, 168)
 
         self._drag_offset: Optional[QPoint] = None
 
         self._build_ui()
+        self._refresh_mode_button()
         self._move_to_default_corner()
 
     def _build_ui(self) -> None:
@@ -109,6 +110,25 @@ class PomodoroWindow(QWidget):
             f"color: {SUBTEXT_COLOR_HEX}; font-size: 12px; font-weight: 600;"
         )
         header_row.addWidget(self.phase_label)
+
+        self.mode_btn = QPushButton("经典")
+        self.mode_btn.setToolTip("切换 经典 25/5 ↔ 深度 90/15")
+        self.mode_btn.setCursor(Qt.PointingHandCursor)
+        self.mode_btn.setFixedHeight(20)
+        self.mode_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            "  color: #C9C9C9;"
+            "  border: 1px solid rgba(255,255,255,0.16);"
+            "  border-radius: 4px;"
+            "  padding: 1px 8px;"
+            "  font-size: 11px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); color: white; }"
+        )
+        self.mode_btn.clicked.connect(self._on_toggle_mode_clicked)
+        header_row.addWidget(self.mode_btn)
         header_row.addStretch(1)
 
         self.cycles_label = QLabel("🍅 0")
@@ -215,6 +235,8 @@ class PomodoroWindow(QWidget):
         elif event == "extended":
             # phase unchanged; remaining seconds will refresh on next tick
             pass
+        elif event == "mode_changed":
+            self._refresh_mode_button()
         elif event == "paused":
             self._set_phase("paused")
             self.toggle_btn.setText("继续")
@@ -306,6 +328,29 @@ class PomodoroWindow(QWidget):
         from shouyu.service.pomodoro import PomodoroService
 
         PomodoroService.instance().skip_break()
+
+    def _on_toggle_mode_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        svc = PomodoroService.instance()
+        new_mode = (
+            PomodoroService.MODE_DEEP
+            if svc.mode() == PomodoroService.MODE_CLASSIC
+            else PomodoroService.MODE_CLASSIC
+        )
+        svc.set_mode(new_mode)
+        self._refresh_mode_button()
+
+    def _refresh_mode_button(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        is_deep = PomodoroService.instance().mode() == PomodoroService.MODE_DEEP
+        self.mode_btn.setText("深度" if is_deep else "经典")
+        self.mode_btn.setToolTip(
+            "当前: 深度 90/15 — 点击切回 经典 25/5"
+            if is_deep
+            else "当前: 经典 25/5 — 点击切到 深度 90/15"
+        )
 
     # ---------- drag support ----------
 
