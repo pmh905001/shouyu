@@ -20,6 +20,8 @@ class _QtBridge(QObject):
     show_todo_signal = Signal()
     show_habit_signal = Signal(list)
     pomodoro_event_signal = Signal(str, str)
+    summon_pomodoro_signal = Signal()
+    toggle_pomodoro_window_signal = Signal()
     show_backup_signal = Signal(str)  # payload = path of auto-recovered backup, or ""
     save_status_signal = Signal(str, str, str)  # (level, title, message)
     quit_signal = Signal()
@@ -56,6 +58,26 @@ class _QtBridge(QObject):
             window.handle_event(event, payload)
         except Exception:
             logging.exception("failed to dispatch pomodoro event")
+
+    @Slot()
+    def _on_summon_pomodoro(self) -> None:
+        try:
+            from shouyu.view.pomodoro_window import PomodoroWindow
+
+            window = PomodoroWindow.get_or_create()
+            window.summon()
+        except Exception:
+            logging.exception("failed to summon pomodoro window")
+
+    @Slot()
+    def _on_toggle_pomodoro_window(self) -> None:
+        try:
+            from shouyu.view.pomodoro_window import PomodoroWindow
+
+            window = PomodoroWindow.get_or_create()
+            window.toggle_visibility()
+        except Exception:
+            logging.exception("failed to toggle pomodoro window visibility")
 
     @Slot(str)
     def _on_show_backup(self, recovered_from: str) -> None:
@@ -117,6 +139,10 @@ class QtApp:
             cls._bridge.show_todo_signal.connect(cls._bridge._on_show_todo, Qt.QueuedConnection)
             cls._bridge.show_habit_signal.connect(cls._bridge._on_show_habit, Qt.QueuedConnection)
             cls._bridge.pomodoro_event_signal.connect(cls._bridge._on_pomodoro_event, Qt.QueuedConnection)
+            cls._bridge.summon_pomodoro_signal.connect(cls._bridge._on_summon_pomodoro, Qt.QueuedConnection)
+            cls._bridge.toggle_pomodoro_window_signal.connect(
+                cls._bridge._on_toggle_pomodoro_window, Qt.QueuedConnection
+            )
             cls._bridge.show_backup_signal.connect(cls._bridge._on_show_backup, Qt.QueuedConnection)
             cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
@@ -152,6 +178,29 @@ class QtApp:
         if cls._bridge is None:
             return
         cls._bridge.pomodoro_event_signal.emit(event, payload)
+
+    @classmethod
+    def show_pomodoro_window(cls) -> None:
+        """Bring the floating pomodoro window back to the foreground.
+
+        Safe to call from any thread (tray, hotkey, http server). Creates
+        the window if it doesn't exist yet. Always shows; never hides.
+        """
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot summon pomodoro window")
+            return
+        cls._bridge.summon_pomodoro_signal.emit()
+
+    @classmethod
+    def toggle_pomodoro_window(cls) -> None:
+        """Show the pomodoro window if hidden, hide it if visible.
+
+        Used by the show/hide hotkey. Safe from any thread.
+        """
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot toggle pomodoro window")
+            return
+        cls._bridge.toggle_pomodoro_window_signal.emit()
 
     @classmethod
     def show_backup_restore(cls, recovered_from: str = "") -> None:

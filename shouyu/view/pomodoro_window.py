@@ -80,6 +80,13 @@ class PomodoroWindow(QWidget):
 
         self._drag_offset: Optional[QPoint] = None
 
+        # Mirror of QWidget visibility, kept in sync via show/hideEvent.
+        # Reading QWidget.isVisible() from non-Qt threads (the tray thread,
+        # the keyboard hotkey thread) is not strictly safe; reading a plain
+        # Python bool is. We use this flag for cross-thread checks like
+        # `is_visible_safe()`.
+        self._visible_flag = False
+
         # Idle-warning blink state. The QTimer ticks at 500ms and flips
         # `_blink_on` to drive a two-frame animation on the phase label
         # (text alternates between "⚠ 已静止 Nm" and "⚠ 请回来工作"; the
@@ -484,6 +491,60 @@ class PomodoroWindow(QWidget):
 
     def _refresh_cycles_label(self) -> None:
         self.cycles_label.setText(self._current_cycles_text())
+
+    # ---------- summon (cross-thread show) ----------
+
+    @classmethod
+    def is_visible_safe(cls) -> bool:
+        """Cross-thread safe visibility check.
+
+        Reads the Python-level `_visible_flag` rather than calling Qt's
+        isVisible(), so the tray and hotkey threads can use it without
+        racing with the GUI thread.
+        """
+        inst = cls._instance
+        return inst is not None and inst._visible_flag
+
+    def summon(self) -> None:
+        """Force the floating window back on screen and to the foreground.
+
+        Used when the user has hidden the window and wants it back. If the
+        window's saved position is now off-screen (e.g. monitor unplugged),
+        we snap it back to the default corner before showing.
+        """
+        if not self._is_geometry_on_any_screen():
+            self._move_to_default_corner()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def toggle_visibility(self) -> None:
+        """Hide if visible, otherwise summon. Used by the show/hide hotkey."""
+        if self._visible_flag:
+            self.hide()
+        else:
+            self.summon()
+
+    def _is_geometry_on_any_screen(self) -> bool:
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            for screen in QGuiApplication.screens():
+                if screen.availableGeometry().intersects(self.frameGeometry()):
+                    return True
+        except Exception:
+            return True
+        return False
+
+    # ---------- visibility tracking ----------
+
+    def showEvent(self, event) -> None:
+        self._visible_flag = True
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self._visible_flag = False
+        super().hideEvent(event)
 
     # ---------- drag support ----------
 

@@ -171,8 +171,25 @@ class Shortcut:
     @classmethod
     def toggle_pomodoro(cls):
         from shouyu.service.pomodoro import PomodoroService
+        from shouyu.view.pomodoro_window import PomodoroWindow
+        from shouyu.view.qt_app import QtApp
 
+        # See Tray.on_toggle_pomodoro: if a cycle is in progress but the
+        # floating window is hidden, prefer summoning it back over toggling
+        # the timer state. Otherwise users feel punished for pressing the
+        # hotkey to "check on" the timer.
+        snap = PomodoroService.instance().snapshot()
+        running = snap.get("phase") in ("working", "short_break", "long_break", "paused")
+        if running and not PomodoroWindow.is_visible_safe():
+            QtApp.show_pomodoro_window()
+            return
         PomodoroService.instance().toggle()
+
+    @classmethod
+    def toggle_pomodoro_window(cls):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.toggle_pomodoro_window()
 
     @classmethod
     def show_backup_restore(cls):
@@ -216,6 +233,7 @@ class Shortcut:
         cls._add_hot_key_from_config('show_todo', cls.show_todo_panel, is_in_queue=False)
         cls._add_hot_key_from_config('show_habits', cls.show_habit_dialog, is_in_queue=False)
         cls._add_hot_key_from_config('toggle_pomodoro', cls.toggle_pomodoro, is_in_queue=False)
+        cls._add_hot_key_from_config('toggle_pomodoro_window', cls.toggle_pomodoro_window, is_in_queue=False)
         cls._add_hot_key_from_config('restore_backup', cls.show_backup_restore, is_in_queue=False)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
