@@ -7,7 +7,7 @@ kb.xlsx
 *.pyc
 build/
 dist/
-授渔.spec
+shouyu.spec
 kb.log
 pid.txt
 shouyu.egg-info/
