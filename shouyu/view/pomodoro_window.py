@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt, QPoint, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -79,6 +79,25 @@ class PomodoroWindow(QWidget):
         self.setFixedSize(296, 168)
 
         self._drag_offset: Optional[QPoint] = None
+
+        # Idle-warning blink state. The QTimer ticks at 500ms and flips
+        # `_blink_on` to drive a two-frame animation on the phase label
+        # (text alternates between "⚠ 已静止 Nm" and "⚠ 请回来工作"; the
+        # card border alternates between the alert red and a dimmer red).
+        # Phase events from PomodoroService stop the blink and restore
+        # normal styles.
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(500)
+        self._blink_timer.timeout.connect(self._on_blink_tick)
+        self._blink_on = False
+        self._blink_idle_seconds = 0
+        self._idle_warning_active = False
+        # Cached so we can restore exactly what we had after blink ends —
+        # the phase may switch while idle (e.g. work → break would also
+        # clear the warning), and we want to reflect whatever the latest
+        # phase event told us, not a stale label.
+        self._normal_phase_text = "空闲"
+        self._normal_phase_color = SUBTEXT_COLOR_HEX
 
         self._build_ui()
         self._refresh_mode_button()
@@ -221,6 +240,11 @@ class PomodoroWindow(QWidget):
             except ValueError:
                 duration = 0
             task_text = task_parts[0] if task_parts else ""
+            # Any phase transition cancels a stuck blink — the service
+            # already emits idle_warning_off on phase change, but stopping
+            # locally too avoids a 1s window where stale alert styling is
+            # left over from the previous phase.
+            self._stop_blink()
             self._set_phase(phase)
             self._set_remaining(duration)
             self._set_task(task_text)
@@ -238,6 +262,7 @@ class PomodoroWindow(QWidget):
         elif event == "mode_changed":
             self._refresh_mode_button()
         elif event == "paused":
+            self._stop_blink()
             self._set_phase("paused")
             self.toggle_btn.setText("继续")
         elif event == "resumed":
@@ -246,26 +271,35 @@ class PomodoroWindow(QWidget):
             self._update_tip(snap["phase"])
             self.toggle_btn.setText("暂停")
         elif event == "stopped":
+            self._stop_blink()
             self._set_phase("idle")
             self._set_remaining(0)
             self._update_tip("idle")
             self.hide()
+        elif event == "idle_warning_on":
+            try:
+                idle_seconds = int(payload)
+            except ValueError:
+                idle_seconds = 0
+            self._start_blink(idle_seconds)
+        elif event == "idle_warning_off":
+            self._stop_blink()
 
         snapshot = PomodoroService.instance().snapshot()
-        cycles_text = f"🍅 {snapshot['completed_today']}"
-        try:
-            from shouyu.util.state import AppState
-
-            skipped = AppState.get_today_counter('breaks_skipped')
-            if skipped:
-                cycles_text += f"  · 跳休 {skipped}"
-        except Exception:
-            pass
-        self.cycles_label.setText(cycles_text)
+        # Don't clobber the blinking 🍅 — let the blink timer keep driving
+        # cycles_label until idle_warning_off lands. Otherwise every tick
+        # event would briefly restore the full "🍅 N" text and cause a
+        # visible jitter.
+        if not self._idle_warning_active:
+            self.cycles_label.setText(self._current_cycles_text())
         self._refresh_action_visibility(snapshot["phase"])
 
     def _set_phase(self, phase: str) -> None:
         label, color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
+        # Remember "what the label should look like when not blinking", so
+        # _stop_blink() can restore it without needing to re-poll the service.
+        self._normal_phase_text = label
+        self._normal_phase_color = color
         self.phase_label.setText(label)
         self.phase_label.setStyleSheet(
             f"color: {color}; font-size: 12px; font-weight: 600;"
@@ -351,6 +385,105 @@ class PomodoroWindow(QWidget):
             if is_deep
             else "当前: 经典 25/5 — 点击切到 深度 90/15"
         )
+
+    # ---------- idle-warning blink ----------
+
+    _ALERT_RED = "#FF3B30"
+    _ALERT_BORDER_DIM = "#7A1F1B"
+
+    def _start_blink(self, idle_seconds: int) -> None:
+        """Enter the "user is drifting off" alert mode.
+
+        Visual:
+          * card border switches to a steady red (so the whole window
+            visually screams), so user notices it from peripheral vision
+          * 🍅 emoji in `cycles_label` flickers on/off every 500ms — the
+            literal "tomato is blinking" the user asked for
+          * phase label changes to "⚠ 已静止 Nm" in red
+
+        We deliberately do NOT raise / re-show the window if the user has
+        manually hidden it: respecting the hide gesture is more important
+        than nudging here.
+        """
+        self._idle_warning_active = True
+        self._blink_idle_seconds = idle_seconds
+        minutes = max(1, idle_seconds // 60)
+        self.phase_label.setText(f"⚠ 已静止 {minutes}m")
+        self.phase_label.setStyleSheet(
+            f"color: {self._ALERT_RED}; font-size: 12px; font-weight: 700;"
+        )
+        self._apply_card_alert_style(True)
+        self._blink_on = True
+        self._on_blink_tick()  # flip immediately, don't wait 500ms
+        self._blink_timer.start()
+
+    def _stop_blink(self) -> None:
+        if not self._idle_warning_active and not self._blink_timer.isActive():
+            return
+        self._blink_timer.stop()
+        self._idle_warning_active = False
+        # Restore phase label from what _set_phase last cached.
+        self.phase_label.setText(self._normal_phase_text)
+        self.phase_label.setStyleSheet(
+            f"color: {self._normal_phase_color}; font-size: 12px; font-weight: 600;"
+        )
+        # Restore the cycles_label by re-deriving it (handle_event already
+        # does this after every event, but on a fresh stop the user might
+        # not see another event for a while — re-deriving keeps things
+        # in sync immediately).
+        self._refresh_cycles_label()
+        self._apply_card_alert_style(False)
+
+    def _on_blink_tick(self) -> None:
+        # Toggle the 🍅 emoji visibility — text-level blink instead of
+        # opacity, because Qt's QLabel doesn't get a setOpacity for free
+        # without QGraphicsOpacityEffect (overkill for a one-glyph blink).
+        snapshot_text = self._current_cycles_text()
+        self._blink_on = not self._blink_on
+        if self._blink_on:
+            self.cycles_label.setText(snapshot_text)
+        else:
+            # Replace the leading 🍅 with a same-width-ish space so the
+            # label width doesn't jump.
+            self.cycles_label.setText(snapshot_text.replace("🍅", " ", 1))
+
+    def _apply_card_alert_style(self, alert: bool) -> None:
+        border_color = self._ALERT_RED if alert else "#3A3A3A"
+        self.card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {PANEL_COLOR_HEX};
+                border-radius: 14px;
+                border: 1px solid {border_color};
+            }}
+            """
+        )
+
+    def _current_cycles_text(self) -> str:
+        """Compute the cycles_label text (🍅 N · 跳休 M) from current state.
+
+        Mirrors what handle_event does after every event, so we can refresh
+        it standalone (e.g. after stopping the blink).
+        """
+        from shouyu.service.pomodoro import PomodoroService
+
+        try:
+            snap = PomodoroService.instance().snapshot()
+            text = f"🍅 {snap['completed_today']}"
+        except Exception:
+            text = "🍅 0"
+        try:
+            from shouyu.util.state import AppState
+
+            skipped = AppState.get_today_counter('breaks_skipped')
+            if skipped:
+                text += f"  · 跳休 {skipped}"
+        except Exception:
+            pass
+        return text
+
+    def _refresh_cycles_label(self) -> None:
+        self.cycles_label.setText(self._current_cycles_text())
 
     # ---------- drag support ----------
 

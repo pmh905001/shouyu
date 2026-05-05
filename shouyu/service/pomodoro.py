@@ -5,12 +5,14 @@ UI updates are dispatched through QtApp.emit_pomodoro_event(...) which is
 thread-safe (queued connection into the Qt event loop).
 
 Events emitted (event_name, payload):
-    "started"        -> "<phase>:<duration_seconds>:<task_text>"
-    "tick"           -> "<remaining_seconds>"
-    "phase_changed"  -> "<new_phase>:<duration_seconds>:<task_text>"
-    "paused"         -> ""
-    "resumed"        -> ""
-    "stopped"        -> ""
+    "started"            -> "<phase>:<duration_seconds>:<task_text>"
+    "tick"               -> "<remaining_seconds>"
+    "phase_changed"      -> "<new_phase>:<duration_seconds>:<task_text>"
+    "paused"             -> ""
+    "resumed"            -> ""
+    "stopped"            -> ""
+    "idle_warning_on"    -> "<idle_seconds>"   (working phase only)
+    "idle_warning_off"   -> ""
 """
 from __future__ import annotations
 
@@ -73,6 +75,11 @@ class PomodoroService:
         self._timer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._state_lock = threading.RLock()
+        # Idle-monitor lives for the whole process lifetime; it self-checks
+        # `_phase` on each tick so we don't need to start/stop it on phase
+        # transitions. Tracks whether we've already emitted the "warning on"
+        # event so we don't spam the UI on every tick.
+        self._idle_warning_active = False
         # Restore last-used mode (classic / deep) so it persists across launches.
         self._mode: str = self.MODE_CLASSIC
         try:
@@ -81,6 +88,12 @@ class PomodoroService:
             self._mode = AppState.pomodoro_mode()
         except Exception:
             logging.exception("failed to read pomodoro mode from state")
+
+        threading.Thread(
+            target=self._idle_monitor_loop,
+            name="pomodoro-idle-monitor",
+            daemon=True,
+        ).start()
 
     # ---------- public API ----------
 
@@ -322,3 +335,57 @@ class PomodoroService:
             QtApp.emit_pomodoro_event(event, payload)
         except Exception:
             logging.exception("failed to emit pomodoro event")
+
+    # ---------- idle monitor ----------
+
+    def _idle_monitor_loop(self) -> None:
+        """Watch global input idle time; nudge the UI when the user is
+        drifting off during a working pomodoro.
+
+        Self-contained — checks `_phase` every tick and gates the warning
+        on `Phase.WORKING`. Pause / stop / break phases automatically clear
+        any active warning, so the UI never gets stuck in the "blinking"
+        state across phase transitions.
+
+        Polling interval is 1s, which is far below the threshold (default
+        300s) and uses a syscall (`GetLastInputInfo`) measured in
+        microseconds — overhead is negligible.
+        """
+        from shouyu.util.idle import seconds_since_last_input
+
+        while True:
+            time.sleep(1.0)
+            try:
+                threshold = Config.pomodoro_idle_warning_seconds()
+            except Exception:
+                logging.exception("idle monitor: failed to read threshold")
+                threshold = 0
+            if threshold <= 0:
+                # Disabled. Make sure we're not leaving the UI in the
+                # blinking state if the user just turned the feature off.
+                if self._idle_warning_active:
+                    self._idle_warning_active = False
+                    self._emit("idle_warning_off", "")
+                continue
+
+            with self._state_lock:
+                phase = self._phase
+
+            if phase != Phase.WORKING:
+                if self._idle_warning_active:
+                    self._idle_warning_active = False
+                    self._emit("idle_warning_off", "")
+                continue
+
+            try:
+                idle = seconds_since_last_input()
+            except Exception:
+                logging.exception("idle monitor: failed to read idle time")
+                continue
+
+            if not self._idle_warning_active and idle >= threshold:
+                self._idle_warning_active = True
+                self._emit("idle_warning_on", str(int(idle)))
+            elif self._idle_warning_active and idle < threshold:
+                self._idle_warning_active = False
+                self._emit("idle_warning_off", "")

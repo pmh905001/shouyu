@@ -96,6 +96,13 @@ class Config:
         return int(cls.get('deep_long_break_minutes', '30', 'pomodoro'))
 
     @classmethod
+    def pomodoro_idle_warning_seconds(cls):
+        """Idle threshold (in seconds) before the working-phase 🍅 starts
+        blinking as a "stop drifting" nudge. Counts both mouse and keyboard
+        inactivity. Set to 0 to disable. Default: 300 (5 minutes)."""
+        return int(cls.get('idle_warning_seconds', '300', 'pomodoro'))
+
+    @classmethod
     def auto_prompt_duration_for_new_tasks(cls):
         """When you finish typing a brand-new task, pop up the duration picker
         so you commit to a time budget before moving on. Defaults to true."""
