@@ -11,3 +11,4 @@ dist/
 kb.log
 pid.txt
 shouyu.egg-info/
+shouyu_state.json

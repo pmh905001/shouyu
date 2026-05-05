@@ -227,11 +227,11 @@ def _persist_plan_in_background(
             if preserved:
                 msg += (
                     f"\n\n你的改动已经写入备用文件，不会丢失：\n{preserved}\n\n"
-                    "请关闭 Excel，然后下次打开仪式时按提示恢复，或手动用此备用文件覆盖主文件。"
+                    "请关闭 Excel，然后下次打开今日任务时按提示恢复，或手动用此备用文件覆盖主文件。"
                 )
             else:
                 msg += "\n\n（备用文件也写入失败；请手动核对最近的备份。）"
-            QtApp.show_save_status('error', "今日仪式保存失败", msg)
+            QtApp.show_save_status('error', "今日任务保存失败", msg)
         except Exception:
             logging.exception("failed to dispatch final-failure popup")
 
@@ -320,7 +320,7 @@ class HabitDialog(QDialog):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("授渔 · 今日仪式")
+        self.setWindowTitle("授渔 · 今日任务")
         self.setModal(False)
         self.setSizeGripEnabled(False)
         # Frameless + always-on-top: the morning ritual MUST be visible above
@@ -335,6 +335,16 @@ class HabitDialog(QDialog):
         self._closing = False
         self._save_already_dispatched = False
         self._yesterday_unfinished: List[PlanTask] = []
+        # Subset of _yesterday_unfinished that we actually render in the
+        # carry-over card right now (after filtering out items the user
+        # already has on today's list). Kept aligned 1-to-1 with
+        # _yesterday_checkboxes so `_carry_over_now` can pair them via zip().
+        self._visible_yesterday: List[PlanTask] = []
+        # Cache of the latest snapshot dict passed into _render_yesterday so
+        # we can re-render after today-list mutations without re-reading Excel.
+        self._yesterday_snap: dict = {
+            "unfinished": [], "done": 0, "total": 0, "pomodoros": 0,
+        }
         self._yesterday_checkboxes: List[QCheckBox] = []
         self._reflection_dirty = False
         # Tracks Python id() of PlanTask objects we just created via the UI.
@@ -450,7 +460,7 @@ class HabitDialog(QDialog):
         row.addWidget(self.streak_label)
 
         close_btn = QPushButton("✕  关闭")
-        close_btn.setToolTip("关闭仪式窗口 (Esc)")
+        close_btn.setToolTip("关闭今日任务窗口 (Esc)")
         close_btn.setMinimumSize(82, 34)
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setAutoDefault(False)
@@ -649,7 +659,7 @@ class HabitDialog(QDialog):
         row.setSpacing(10)
 
         tip = QLabel(
-            "Esc 跳过 ·  Ctrl+Enter 开始今天 ·  Ctrl+Alt+H 重新打开仪式"
+            "Esc 跳过 ·  Ctrl+Enter 开始今天 ·  Ctrl+Alt+H 重新打开今日任务"
         )
         tip.setObjectName("HintLabel")
         row.addWidget(tip)
@@ -708,6 +718,10 @@ class HabitDialog(QDialog):
             self.task_stack.setCurrentWidget(self.list_widget)
 
     def _render_yesterday(self, snap: dict) -> None:
+        # Cache the snapshot so `_refresh_carryover_visibility` can re-render
+        # later without re-reading Excel.
+        self._yesterday_snap = snap
+
         # Glance label
         if snap["total"] > 0 or snap["pomodoros"] > 0:
             parts = []
@@ -730,13 +744,29 @@ class HabitDialog(QDialog):
             if widget is not None:
                 widget.deleteLater()
 
-        if not self._yesterday_unfinished:
+        # Filter out yesterday items that already exist in today's task list
+        # (matched by stripped text). This avoids the carry-over card nagging
+        # the user about tasks they've already brought forward — whether by
+        # the "结转选中 →" button, by typing them in manually, or by leaving
+        # them in today's plan from a previous session.
+        today_texts = {
+            (t.text or "").strip()
+            for t in self._tasks
+            if (t.text or "").strip()
+        }
+        self._visible_yesterday = [
+            t for t in self._yesterday_unfinished
+            if (t.text or "").strip()
+            and (t.text or "").strip() not in today_texts
+        ]
+
+        if not self._visible_yesterday:
             self.carryover_card.setVisible(False)
             return
 
         header = QHBoxLayout()
         header.setSpacing(6)
-        header_label = QLabel(f"📅 昨日还有 {len(self._yesterday_unfinished)} 项未完成")
+        header_label = QLabel(f"📅 昨日还有 {len(self._visible_yesterday)} 项未完成")
         header_label.setStyleSheet(f"font-weight: 600; color: {TEXT_COLOR_HEX};")
         header.addWidget(header_label)
         header.addStretch(1)
@@ -789,7 +819,7 @@ class HabitDialog(QDialog):
 
         self.carryover_layout.addLayout(header)
 
-        for task in self._yesterday_unfinished:
+        for task in self._visible_yesterday:
             cb = QCheckBox(task.text or "（空任务）")
             cb.setChecked(True)
             cb.setStyleSheet(f"QCheckBox {{ color: {TEXT_COLOR_HEX}; }}")
@@ -1105,11 +1135,11 @@ class HabitDialog(QDialog):
             cb.setChecked(checked)
 
     def _carry_over_now(self) -> None:
-        if not self._yesterday_unfinished:
+        if not self._visible_yesterday:
             return
         chosen = [
             task
-            for task, cb in zip(self._yesterday_unfinished, self._yesterday_checkboxes)
+            for task, cb in zip(self._visible_yesterday, self._yesterday_checkboxes)
             if cb.isChecked()
         ]
         if not chosen:
@@ -1229,6 +1259,40 @@ class HabitDialog(QDialog):
         self.progress_bar.setRange(0, max(total, 1))
         self.progress_bar.setValue(done)
         self._render_review()
+        self._refresh_carryover_visibility()
+
+    def _refresh_carryover_visibility(self) -> None:
+        """Re-render the yesterday-carryover card honoring the current today
+        list. Items already in today (by stripped text) are filtered out;
+        if everything is already there, the card hides itself.
+
+        Cheap to call after every today-list mutation — that's why
+        `_update_stats` (which already runs after every change) drives it.
+
+        Short-circuits when the visible-set hasn't changed, to avoid
+        clobbering the user's checkbox selections on every keystroke.
+        """
+        if not self._yesterday_unfinished:
+            return
+        today_texts = {
+            (t.text or "").strip()
+            for t in self._tasks
+            if (t.text or "").strip()
+        }
+        new_visible_texts = {
+            (t.text or "").strip()
+            for t in self._yesterday_unfinished
+            if (t.text or "").strip()
+            and (t.text or "").strip() not in today_texts
+        }
+        cur_visible_texts = {
+            (t.text or "").strip()
+            for t in self._visible_yesterday
+            if (t.text or "").strip()
+        }
+        if new_visible_texts == cur_visible_texts:
+            return
+        self._render_yesterday(self._yesterday_snap)
 
     def _render_review(self) -> None:
         """Day-end estimated-vs-actual recap.
