@@ -164,6 +164,7 @@ def _persist_plan_in_background(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
     reflection_text: Optional[str] = None,
+    yesterday_done_rows: Optional[List[int]] = None,
 ) -> None:
     """Run the openpyxl backup+save on a worker thread; the UI returns instantly.
 
@@ -173,6 +174,10 @@ def _persist_plan_in_background(
     save automatically), and only bother the user with a popup if all retries
     are exhausted. In that case we also write the in-memory workbook to a
     sibling `<name>.unsaved_<ts>.xlsx` so the data is never silently lost.
+
+    `yesterday_done_rows`: plan-area row numbers in *yesterday's* worksheet
+    that the user just marked as DONE via the carry-over card. Useful for the
+    "I forgot to check off this task yesterday" case.
     """
 
     def _stage_changes(excel) -> None:
@@ -186,6 +191,13 @@ def _persist_plan_in_background(
             plan.switch_in_progress(new_in_progress)
         if reflection_text is not None:
             excel.stage_reflection(reflection_text)
+        # Apply belated DONE marks on yesterday's sheet, if any.
+        if yesterday_done_rows:
+            yesterday_plan = excel.plan_service_for(AppState.yesterday_str())
+            if yesterday_plan is not None:
+                for row in yesterday_done_rows:
+                    if row:
+                        yesterday_plan.mark_plan_done(row)
         excel.mark_changed()
 
     def _notify_retry_started(reason: str) -> None:
@@ -293,10 +305,14 @@ def _read_yesterday_snapshot() -> dict:
         tasks = plan.read_plan_tasks()
         out["total"] = len(tasks)
         out["done"] = sum(1 for t in tasks if t.status == TaskStatus.DONE)
+        # NOTE: we deliberately preserve `row` here so the carry-over UI can
+        # later mark a yesterday task as DONE in the original worksheet via
+        # PlanService.mark_plan_done(row).
         out["unfinished"] = [
             PlanTask(
                 text=t.text,
                 status=TaskStatus.PENDING,
+                row=t.row,
                 duration_minutes=t.duration_minutes,
                 priority=t.priority,
             )
@@ -349,6 +365,11 @@ class HabitDialog(QDialog):
         # already has on today's list). Kept aligned 1-to-1 with
         # _yesterday_checkboxes so `_carry_over_now` can pair them via zip().
         self._visible_yesterday: List[PlanTask] = []
+        # Yesterday rows the user just marked as DONE (because they forgot to
+        # tick them yesterday). The row numbers are persisted via
+        # PlanService.mark_plan_done() during the next save. Tracking them
+        # also lets `_has_unsaved_changes` flag this kind of edit.
+        self._yesterday_marked_done_rows: set = set()
         # Cache of the latest snapshot dict passed into _render_yesterday so
         # we can re-render after today-list mutations without re-reading Excel.
         self._yesterday_snap: dict = {
@@ -405,6 +426,7 @@ class HabitDialog(QDialog):
         # Yesterday & streak: cheap enough to fetch on every open.
         snap = _read_yesterday_snapshot()
         self._yesterday_unfinished = list(snap["unfinished"])
+        self._yesterday_marked_done_rows = set()
         self._render_yesterday(snap)
         self._render_streak()
 
@@ -833,12 +855,53 @@ class HabitDialog(QDialog):
 
         self.carryover_layout.addLayout(header)
 
+        # Per-row mark-done button styling — green tint to read as a
+        # confirmation/completion affordance, distinct from the blue carry-over
+        # primary button.
+        done_btn_qss = (
+            "QPushButton {"
+            "  background-color: rgba(16, 124, 16, 0.18);"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  border: 1px solid rgba(16, 124, 16, 0.45);"
+            "  border-radius: 4px;"
+            "  padding: 2px 8px;"
+            "  font-size: 11px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(16, 124, 16, 0.32); }"
+        )
+
         for task in self._visible_yesterday:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+
             cb = QCheckBox(task.text or "（空任务）")
             cb.setChecked(True)
             cb.setStyleSheet(f"QCheckBox {{ color: {TEXT_COLOR_HEX}; }}")
             self._yesterday_checkboxes.append(cb)
-            self.carryover_layout.addWidget(cb)
+            row.addWidget(cb, stretch=1)
+
+            done_btn = QPushButton("✓ 已完成")
+            done_btn.setToolTip(
+                "把昨天这条任务标记为「已完成」（保存后写回昨天的工作表）"
+            )
+            done_btn.setAutoDefault(False)
+            done_btn.setCursor(Qt.PointingHandCursor)
+            done_btn.setStyleSheet(done_btn_qss)
+            # Snapshot the PlanTask reference so the lambda doesn't capture
+            # the loop variable by name.
+            done_btn.clicked.connect(
+                lambda _checked=False, t=task: self._mark_yesterday_done(t)
+            )
+            # If the task didn't carry a row (shouldn't normally happen — read
+            # via PlanService always populates row), hide the button to avoid
+            # silently doing nothing.
+            if not task.row:
+                done_btn.setEnabled(False)
+                done_btn.setToolTip("（无法定位到昨日工作表的对应行）")
+            row.addWidget(done_btn)
+
+            self.carryover_layout.addLayout(row)
 
         self.carryover_card.setVisible(True)
 
@@ -1148,6 +1211,26 @@ class HabitDialog(QDialog):
         for cb in self._yesterday_checkboxes:
             cb.setChecked(checked)
 
+    def _mark_yesterday_done(self, task: PlanTask) -> None:
+        """Tag a yesterday task as DONE — for the common case where the user
+        actually finished it but forgot to tick the box yesterday.
+
+        We only stage the change in memory here. The actual write to
+        yesterday's worksheet happens in `_persist_plan_in_background` so the
+        edit is properly retried/recovered like the rest of the save path.
+        """
+        if not task.row:
+            return  # defensive — button should already be disabled in this case
+        self._yesterday_marked_done_rows.add(task.row)
+        # Drop the task from today's carry-over view so it stops nagging the
+        # user. We match by row (unique within the day) rather than text so
+        # duplicates with the same name don't both disappear.
+        self._yesterday_unfinished = [
+            t for t in self._yesterday_unfinished if t.row != task.row
+        ]
+        self._render_yesterday(self._yesterday_snap)
+        self._update_stats()
+
     def _carry_over_now(self) -> None:
         if not self._visible_yesterday:
             return
@@ -1421,7 +1504,13 @@ class HabitDialog(QDialog):
         reflection = (
             self.reflection_edit.toPlainText() if self._reflection_dirty else None
         )
-        _persist_plan_in_background(tasks_snapshot, self._original_in_progress, reflection)
+        yesterday_done_rows = sorted(self._yesterday_marked_done_rows)
+        _persist_plan_in_background(
+            tasks_snapshot,
+            self._original_in_progress,
+            reflection,
+            yesterday_done_rows,
+        )
 
     # ---------- unsaved-change detection ----------
 
@@ -1447,6 +1536,8 @@ class HabitDialog(QDialog):
 
     def _has_unsaved_changes(self) -> bool:
         if self._snapshot_tasks(self._tasks) != self._initial_tasks_snapshot:
+            return True
+        if self._yesterday_marked_done_rows:
             return True
         if self._reflection_dirty:
             current = self.reflection_edit.toPlainText() or ""
