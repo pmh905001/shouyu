@@ -334,6 +334,15 @@ class HabitDialog(QDialog):
         self._original_in_progress: Optional[str] = None
         self._closing = False
         self._save_already_dispatched = False
+        # Snapshot of the plan state right after the last load from Excel.
+        # Used by `_has_unsaved_changes` so Esc / 关闭 can warn the user before
+        # silently dropping their edits. Reflection is tracked separately
+        # because its dirty bit already exists.
+        self._initial_tasks_snapshot: List[tuple] = []
+        self._initial_reflection: str = ""
+        # When the user picks "不保存" in the confirmation dialog we still
+        # need closeEvent to skip the auto-save it would normally do.
+        self._skip_save_on_close = False
         self._yesterday_unfinished: List[PlanTask] = []
         # Subset of _yesterday_unfinished that we actually render in the
         # carry-over card right now (after filtering out items the user
@@ -386,6 +395,10 @@ class HabitDialog(QDialog):
         self.reflection_edit.blockSignals(False)
         self._reflection_dirty = False
 
+        # Capture the just-loaded state so we can detect unsaved edits later.
+        self._initial_tasks_snapshot = self._snapshot_tasks(self._tasks)
+        self._initial_reflection = reflection or ""
+
         self._render_tasks()
         self._update_stats()
 
@@ -404,6 +417,7 @@ class HabitDialog(QDialog):
         """
         self._closing = False
         self._save_already_dispatched = False
+        self._skip_save_on_close = False
         self._reset_action_buttons()
         self._update_header()
         self._apply_time_theme()
@@ -1409,9 +1423,79 @@ class HabitDialog(QDialog):
         )
         _persist_plan_in_background(tasks_snapshot, self._original_in_progress, reflection)
 
+    # ---------- unsaved-change detection ----------
+
+    @staticmethod
+    def _snapshot_tasks(tasks: List[PlanTask]) -> List[tuple]:
+        """Tuple-ize tasks so equality / ordering comparison is structural.
+
+        Empty-text tasks are dropped so a stray empty row created by Excel-like
+        auto-extend doesn't register as an "edit". Note that this matches the
+        save path (`_persist_plan_in_background` also filters empties).
+        """
+        out: List[tuple] = []
+        for t in tasks:
+            if not (t.text or "").strip():
+                continue
+            out.append((
+                (t.text or "").strip(),
+                t.status,
+                int(t.duration_minutes or 0),
+                t.priority,
+            ))
+        return out
+
+    def _has_unsaved_changes(self) -> bool:
+        if self._snapshot_tasks(self._tasks) != self._initial_tasks_snapshot:
+            return True
+        if self._reflection_dirty:
+            current = self.reflection_edit.toPlainText() or ""
+            if current != (self._initial_reflection or ""):
+                return True
+        return False
+
+    def _confirm_unsaved_then_close(self) -> None:
+        """Esc / 关闭 / 跳过 path: ask before discarding edits."""
+        box = QMessageBox(self)
+        box.setWindowTitle("保存今日任务变更？")
+        box.setIcon(QMessageBox.Question)
+        box.setText("今日任务列表有未保存的变更。")
+        box.setInformativeText("是否保存这些变更后再关闭？")
+        save_btn = box.addButton("保存并关闭", QMessageBox.AcceptRole)
+        discard_btn = box.addButton("不保存", QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.setEscapeButton(cancel_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            # Same path as Ctrl+Enter — but we still want reject() semantics
+            # afterwards (the morning ritual is "skipped" for streak purposes
+            # only via _save_and_accept, so we mimic just the save half here).
+            self._dispatch_save()
+            super().reject()
+        elif clicked is discard_btn:
+            self._skip_save_on_close = True
+            super().reject()
+        # Cancel: do nothing, leave the window open.
+
     # ---------- qt overrides ----------
+
+    def reject(self) -> None:
+        # Esc, the "✕ 关闭" button, and the "跳过" button all funnel through
+        # here. Only show the confirmation when there's actually something to
+        # lose; otherwise close instantly so the dialog stays out of the way.
+        if self._closing:
+            super().reject()
+            return
+        if not self._has_unsaved_changes():
+            super().reject()
+            return
+        self._confirm_unsaved_then_close()
 
     def closeEvent(self, event) -> None:
         self._closing = True
-        self._dispatch_save()
+        if not self._skip_save_on_close:
+            self._dispatch_save()
         event.accept()
