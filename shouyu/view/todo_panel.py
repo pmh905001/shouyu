@@ -7,13 +7,13 @@ thread so closing feels instant.
 Keys:
     Up/Down                navigate tasks
     Alt+Up / Alt+Down      reorder (or just drag)
-    Space                  cycle status pending → in_progress → done → pending
     F2 / Enter             start editing the current task
     Enter (in editor)      commit and start editing next task (Excel-like)
     Ctrl+Plus              add a new task below current
-    Ctrl+Minus             delete current task (with confirmation)
-    Ctrl+L                 jump to the quick-add input
+    Ctrl+Minus             delete current task (no confirmation; use Ctrl+Z to restore)
+    Ctrl+Z / Ctrl+Y        undo / redo any task-level edit
     Ctrl+P                 start a pomodoro on the current task (focus mode)
+    Right-click            change status, priority, duration, reflection…
     Esc                    save & close
 """
 from __future__ import annotations
@@ -29,12 +29,11 @@ from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QStackedLayout,
@@ -71,12 +70,6 @@ _STATUS_COLORS = {
     TaskStatus.DONE: DONE_COLOR_HEX,
 }
 
-_NEXT_STATUS = {
-    TaskStatus.PENDING: TaskStatus.IN_PROGRESS,
-    TaskStatus.IN_PROGRESS: TaskStatus.DONE,
-    TaskStatus.DONE: TaskStatus.PENDING,
-}
-
 _PRIORITY_BADGE = {
     TaskPriority.P1: "🔴 P1",
     TaskPriority.P2: "🟡 P2",
@@ -96,6 +89,8 @@ def _format_item(task: PlanTask) -> str:
         parts.append(f"   ⏱ {task.duration_minutes}m")
     if task.status == TaskStatus.IN_PROGRESS:
         parts.append("   🎯 重点")
+    if (task.reflection or "").strip():
+        parts.append("   📝")
     return "".join(parts)
 
 
@@ -222,8 +217,12 @@ class TodoPanel(QWidget):
 
         self._tasks: List[PlanTask] = []
         self._original_in_progress: Optional[str] = None
-        self._save_already_dispatched = False
         self._pending_duration_prompt: set = set()
+
+        # See HabitDialog._undo_stack for the full rationale.
+        self._undo_stack: List[List[PlanTask]] = []
+        self._redo_stack: List[List[PlanTask]] = []
+        self._in_undo_redo = False
 
         self._build_ui()
         self._install_shortcuts()
@@ -246,7 +245,10 @@ class TodoPanel(QWidget):
         self._tasks = tasks
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
-        self._save_already_dispatched = False
+        # Re-loading from Excel invalidates undo history (PlanTask identity
+        # changes on disk).
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self._reload_list_widget()
         self._update_stats()
 
@@ -292,18 +294,13 @@ class TodoPanel(QWidget):
         layout.addWidget(self.progress_bar)
 
         hint = QLabel(
-            "↑↓ 选择 ·  F2 / 回车 编辑 ·  Space 切换状态 ·  Alt+↑↓ 重排 ·  "
-            "Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  Ctrl+L 快速添加 ·  Ctrl+P 专注 ·  "
-            "右键 → 优先级 / 时长"
+            "↑↓ 选择 ·  F2 / 回车 编辑 ·  Alt+↑↓ 重排 ·  "
+            "Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  Ctrl+Z 撤销 / Ctrl+Y 重做 ·  "
+            "Ctrl+P 专注 ·  右键 → 状态 / 优先级 / 时长"
         )
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-
-        self.quick_add = QLineEdit()
-        self.quick_add.setPlaceholderText("➕ 快速添加任务并按回车…  (Ctrl+L 跳到这里)")
-        self.quick_add.returnPressed.connect(self._on_quick_add_submitted)
-        layout.addWidget(self.quick_add)
 
         self.task_stack_host = QWidget()
         self.task_stack = QStackedLayout(self.task_stack_host)
@@ -334,19 +331,6 @@ class TodoPanel(QWidget):
         layout.addWidget(self.task_stack_host, stretch=1)
 
         button_row = QHBoxLayout()
-        add_btn = QPushButton("+ 新增任务")
-        add_btn.setToolTip("Ctrl++ 添加一个任务到当前下方")
-        add_btn.setAutoDefault(False)
-        add_btn.setDefault(False)
-        add_btn.clicked.connect(self._add_new_task)
-        button_row.addWidget(add_btn)
-
-        toggle_btn = QPushButton("切换状态 (Space)")
-        toggle_btn.setAutoDefault(False)
-        toggle_btn.setDefault(False)
-        toggle_btn.clicked.connect(self._cycle_selected_status)
-        button_row.addWidget(toggle_btn)
-
         focus_btn = QPushButton("🍅 专注此项 (Ctrl+P)")
         focus_btn.setAutoDefault(False)
         focus_btn.setDefault(False)
@@ -367,8 +351,11 @@ class TodoPanel(QWidget):
     def _install_shortcuts(self) -> None:
         # Window-wide shortcuts (NOT plain Return/Enter — those need to reach the
         # inline editor when one is open).
+        #
+        # Space-to-cycle-status was removed on purpose: users found it too
+        # easy to flip a task's state accidentally. Status changes now go
+        # exclusively through the right-click context menu.
         window_bindings = [
-            ("Space", self._cycle_selected_status),
             ("F2", self._edit_selected),
             ("Alt+Up", lambda: self._move_selected(-1)),
             ("Alt+Down", lambda: self._move_selected(1)),
@@ -377,8 +364,10 @@ class TodoPanel(QWidget):
             ("Ctrl+Shift+=", self._add_new_task),
             ("Ctrl+-", self._delete_selected),
             ("Ctrl+Minus", self._delete_selected),
-            ("Ctrl+L", self._quick_add_focus),
             ("Ctrl+P", self._focus_pomodoro_on_selected),
+            ("Ctrl+Z", self._undo),
+            ("Ctrl+Y", self._redo),
+            ("Ctrl+Shift+Z", self._redo),
             ("Esc", self._save_and_close),
             ("Escape", self._save_and_close),
         ]
@@ -407,6 +396,9 @@ class TodoPanel(QWidget):
             item.setFlags(flags)
             item.setData(_TASK_ROLE, task)
             _apply_item_style(item, task.status)
+            reflection = (task.reflection or "").strip()
+            if reflection:
+                item.setToolTip(f"📝 反思\n\n{reflection}")
             self.list_widget.addItem(item)
         self.list_widget.blockSignals(False)
         if self.list_widget.count() > 0:
@@ -431,13 +423,20 @@ class TodoPanel(QWidget):
         item.setText(_format_item(task))
         _apply_item_style(item, task.status)
         item.setData(_TASK_ROLE, task)
+        reflection = (task.reflection or "").strip()
+        item.setToolTip(f"📝 反思\n\n{reflection}" if reflection else "")
         self.list_widget.blockSignals(False)
 
     def _on_item_text_edited(self, item: QListWidgetItem) -> None:
         """Sync data only; cursor advance is driven by `_on_editor_closed`."""
         index = self.list_widget.row(item)
         if 0 <= index < len(self._tasks):
-            self._tasks[index].text = self._strip_glyph(item.text())
+            new_text = self._strip_glyph(item.text())
+            if self._tasks[index].text == new_text:
+                self._refresh_item(index)
+                return
+            self._push_undo()
+            self._tasks[index].text = new_text
             self._refresh_item(index)
             self._update_stats()
 
@@ -464,6 +463,7 @@ class TodoPanel(QWidget):
                     current=30, task_text=task.text, parent=self
                 )
                 if value > 0:
+                    self._push_undo()
                     task.duration_minutes = value
                     self._refresh_item(index)
                     self._update_stats()
@@ -476,6 +476,7 @@ class TodoPanel(QWidget):
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
         ):
+            self._push_undo()
             new_task = PlanTask(text="", status=TaskStatus.PENDING)
             self._pending_duration_prompt.add(id(new_task))
             self._tasks.append(new_task)
@@ -494,7 +495,7 @@ class TodoPanel(QWidget):
                 break
         text = text.lstrip()
         first_marker = -1
-        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪"):
+        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪", "   📝"):
             idx = text.find(marker)
             if idx >= 0 and (first_marker < 0 or idx < first_marker):
                 first_marker = idx
@@ -512,23 +513,90 @@ class TodoPanel(QWidget):
                 self.list_widget.editItem(item)
 
     def _on_rows_moved(self, *args) -> None:
+        # See HabitDialog._on_rows_moved for why undo capture happens here.
         new_order: List[PlanTask] = []
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
             task = item.data(_TASK_ROLE)
             if isinstance(task, PlanTask):
                 new_order.append(task)
-        if len(new_order) == len(self._tasks):
+        if len(new_order) == len(self._tasks) and new_order != self._tasks:
+            self._undo_stack.append(self._clone_tasks(self._tasks))
+            if len(self._undo_stack) > 100:
+                del self._undo_stack[0:len(self._undo_stack) - 100]
+            self._redo_stack.clear()
             self._tasks = new_order
+
+    # ---------- undo / redo ----------
+
+    @staticmethod
+    def _clone_tasks(tasks: List[PlanTask]) -> List[PlanTask]:
+        return [
+            PlanTask(
+                text=t.text,
+                status=t.status,
+                row=t.row,
+                duration_minutes=t.duration_minutes,
+                priority=t.priority,
+                reflection=t.reflection,
+            )
+            for t in tasks
+        ]
+
+    def _push_undo(self) -> None:
+        if self._in_undo_redo:
+            return
+        self._undo_stack.append(self._clone_tasks(self._tasks))
+        if len(self._undo_stack) > 100:
+            del self._undo_stack[0:len(self._undo_stack) - 100]
+        self._redo_stack.clear()
+
+    def _undo(self) -> None:
+        if not self._undo_stack:
+            return
+        self._in_undo_redo = True
+        try:
+            self._redo_stack.append(self._clone_tasks(self._tasks))
+            self._tasks = self._undo_stack.pop()
+            self._original_in_progress = next(
+                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
+                None,
+            )
+            self._reload_list_widget()
+            self._update_stats()
+        finally:
+            self._in_undo_redo = False
+
+    def _redo(self) -> None:
+        if not self._redo_stack:
+            return
+        self._in_undo_redo = True
+        try:
+            self._undo_stack.append(self._clone_tasks(self._tasks))
+            self._tasks = self._redo_stack.pop()
+            self._original_in_progress = next(
+                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
+                None,
+            )
+            self._reload_list_widget()
+            self._update_stats()
+        finally:
+            self._in_undo_redo = False
 
     # ---------- actions ----------
 
-    def _cycle_selected_status(self) -> None:
+    def _set_status(self, new_status: TaskStatus) -> None:
+        """Replace the old Space-cycle behavior with direct status setters.
+
+        Marking DONE additionally pops up the (skippable) reflection prompt.
+        """
         index = self._selected_index()
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
-        new_status = _NEXT_STATUS[task.status]
+        if task.status == new_status:
+            return
+        self._push_undo()
         if new_status == TaskStatus.IN_PROGRESS:
             for other in self._tasks:
                 if other is not task and other.status == TaskStatus.IN_PROGRESS:
@@ -537,8 +605,34 @@ class TodoPanel(QWidget):
         self._reload_list_widget()
         self.list_widget.setCurrentRow(index)
         self._update_stats()
+        if new_status == TaskStatus.DONE:
+            self._prompt_reflection_for(index)
+
+    def _prompt_reflection_for(self, index: int) -> None:
+        if not (0 <= index < len(self._tasks)):
+            return
+        task = self._tasks[index]
+        text, ok = QInputDialog.getMultiLineText(
+            self,
+            "记录反思（可跳过）",
+            f"完成了「{task.text or '（空任务）'}」想留下点什么？\n"
+            "卡在哪？哪步可以下次做得更好？空着按确定也行。",
+            task.reflection or "",
+        )
+        if not ok:
+            return
+        new_reflection = text.strip()
+        if new_reflection == (task.reflection or "").strip():
+            return
+        self._push_undo()
+        task.reflection = new_reflection
+        self._refresh_item(index)
+
+    def _edit_reflection_for_selected(self) -> None:
+        self._prompt_reflection_for(self._selected_index())
 
     def _add_new_task(self, text: str = "") -> None:
+        self._push_undo()
         new_task = PlanTask(text=text, status=TaskStatus.PENDING)
         self._pending_duration_prompt.add(id(new_task))
         index = self._selected_index()
@@ -555,17 +649,11 @@ class TodoPanel(QWidget):
             QTimer.singleShot(0, lambda r=target: self._edit_row(r))
 
     def _delete_selected(self) -> None:
+        # No confirmation by design — Ctrl+Z restores the task.
         index = self._selected_index()
         if not (0 <= index < len(self._tasks)):
             return
-        text = self._tasks[index].text or "（空任务）"
-        confirm = QMessageBox.question(
-            self,
-            "删除任务",
-            f"确定要删除「{text}」吗？此操作不可撤销。",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+        self._push_undo()
         self._tasks.pop(index)
         self._reload_list_widget()
         if self._tasks:
@@ -577,6 +665,7 @@ class TodoPanel(QWidget):
         new_index = index + offset
         if not (0 <= index < len(self._tasks)) or not (0 <= new_index < len(self._tasks)):
             return
+        self._push_undo()
         self._tasks[index], self._tasks[new_index] = self._tasks[new_index], self._tasks[index]
         self._reload_list_widget()
         self.list_widget.setCurrentRow(new_index)
@@ -586,8 +675,28 @@ class TodoPanel(QWidget):
         menu = QMenu(self.list_widget)
         if item is not None:
             self.list_widget.setCurrentItem(item)
+            task = self._tasks[self._selected_index()] \
+                if 0 <= self._selected_index() < len(self._tasks) else None
             menu.addAction("编辑  (F2 / Enter)", self._edit_selected)
-            menu.addAction("切换状态  (Space)", self._cycle_selected_status)
+            status_menu = menu.addMenu("🚥 状态")
+            pending_act = status_menu.addAction(
+                "○  待办", lambda: self._set_status(TaskStatus.PENDING)
+            )
+            in_progress_act = status_menu.addAction(
+                "▶  进行中", lambda: self._set_status(TaskStatus.IN_PROGRESS)
+            )
+            done_act = status_menu.addAction(
+                "✓  已完成（写反思）", lambda: self._set_status(TaskStatus.DONE)
+            )
+            if task is not None:
+                pending_act.setCheckable(True)
+                in_progress_act.setCheckable(True)
+                done_act.setCheckable(True)
+                pending_act.setChecked(task.status == TaskStatus.PENDING)
+                in_progress_act.setChecked(task.status == TaskStatus.IN_PROGRESS)
+                done_act.setChecked(task.status == TaskStatus.DONE)
+            if task is not None and task.status == TaskStatus.DONE:
+                menu.addAction("📝 编辑反思…", self._edit_reflection_for_selected)
             menu.addAction("🍅 专注此项  (Ctrl+P)", self._focus_pomodoro_on_selected)
             menu.addAction("⏱ 设置时长…", self._set_duration_for_selected)
             priority_menu = menu.addMenu("🚦 优先级")
@@ -602,12 +711,20 @@ class TodoPanel(QWidget):
         menu.addAction("新增任务  (Ctrl+ +)", self._add_new_task)
         if item is not None:
             menu.addAction("删除任务  (Ctrl+ −)", self._delete_selected)
+        menu.addSeparator()
+        undo_act = menu.addAction("撤销  (Ctrl+Z)", self._undo)
+        undo_act.setEnabled(bool(self._undo_stack))
+        redo_act = menu.addAction("重做  (Ctrl+Y)", self._redo)
+        redo_act.setEnabled(bool(self._redo_stack))
         menu.exec(self.list_widget.mapToGlobal(pos))
 
     def _set_priority(self, priority: TaskPriority) -> None:
         index = self._selected_index()
         if not (0 <= index < len(self._tasks)):
             return
+        if self._tasks[index].priority == priority:
+            return
+        self._push_undo()
         self._tasks[index].priority = priority
         self._refresh_item(index)
         self._update_stats()
@@ -624,39 +741,20 @@ class TodoPanel(QWidget):
         )
         if value < 0:
             return
+        if value == task.duration_minutes:
+            return
+        self._push_undo()
         task.duration_minutes = value
         self._refresh_item(index)
         self._update_stats()
-
-    def _quick_add_focus(self) -> None:
-        self.quick_add.setFocus()
-        self.quick_add.selectAll()
-
-    def _on_quick_add_submitted(self) -> None:
-        text = (self.quick_add.text() or "").strip()
-        if not text:
-            return
-        self.quick_add.clear()
-        new_task = PlanTask(text=text, status=TaskStatus.PENDING)
-        self._tasks.append(new_task)
-        self._reload_list_widget()
-        new_row = len(self._tasks) - 1
-        self.list_widget.setCurrentRow(new_row)
-        self._update_stats()
-        if Config.auto_prompt_duration_for_new_tasks():
-            value = DurationPickerDialog.get_duration(
-                current=30, task_text=text, parent=self
-            )
-            if value > 0:
-                new_task.duration_minutes = value
-                self._refresh_item(new_row)
-                self._update_stats()
 
     def _focus_pomodoro_on_selected(self) -> None:
         index = self._selected_index()
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
+        if task.status != TaskStatus.IN_PROGRESS:
+            self._push_undo()
         for other in self._tasks:
             if other is not task and other.status == TaskStatus.IN_PROGRESS:
                 other.status = TaskStatus.PENDING
@@ -723,19 +821,9 @@ class TodoPanel(QWidget):
         self.closed.emit()
 
     def _dispatch_save(self) -> None:
-        if self._save_already_dispatched:
-            return
-        self._save_already_dispatched = True
-        tasks_snapshot = [
-            PlanTask(
-                text=t.text,
-                status=t.status,
-                row=t.row,
-                duration_minutes=t.duration_minutes,
-                priority=t.priority,
-            )
-            for t in self._tasks
-        ]
+        # Each save dispatches a fresh worker (writes are idempotent), so
+        # later edits never get lost behind an earlier "already saving" flag.
+        tasks_snapshot = self._clone_tasks(self._tasks)
         _persist_plan_in_background(tasks_snapshot, self._original_in_progress)
 
     # ---------- qt overrides ----------

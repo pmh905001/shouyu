@@ -73,7 +73,12 @@ PLAN_HEADER_TEXT = "plan"
 PLAN_TASK_COLUMN = "B"
 PLAN_DURATION_COLUMN = "C"
 PLAN_PRIORITY_COLUMN = "D"
+PLAN_REFLECTION_COLUMN = "E"
 PLAN_FIRST_TASK_ROW = 2
+
+# Reflection text color: deliberately the same hex as IN_PROGRESS so the
+# reflection cells visually stand out from the plain task text in Excel.
+REFLECTION_COLOR = "FFC00000"
 
 ACTIVE_TASK_COLUMN = "A"
 ACTIVE_DETAIL_COLUMN = "B"
@@ -120,6 +125,10 @@ class PlanTask:
     row: int = 0  # 0 means "not yet placed in Excel"
     duration_minutes: int = 0  # 0 means not specified
     priority: TaskPriority = TaskPriority.NONE
+    # Free-form reflection captured (optionally) when the user marks the
+    # task DONE. Persisted in the plan-area E column with a red font so it
+    # stands out from the task text itself.
+    reflection: str = ""
 
     def display_text(self) -> str:
         return self.text or ""
@@ -179,6 +188,8 @@ class PlanService:
             priority = TaskPriority.from_value(
                 self.ws[f"{PLAN_PRIORITY_COLUMN}{row}"].value
             )
+            reflection_value = self.ws[f"{PLAN_REFLECTION_COLUMN}{row}"].value
+            reflection = str(reflection_value) if reflection_value is not None else ""
             tasks.append(
                 PlanTask(
                     text=str(value),
@@ -186,6 +197,7 @@ class PlanService:
                     row=row,
                     duration_minutes=duration,
                     priority=priority,
+                    reflection=reflection,
                 )
             )
             row += 1
@@ -208,10 +220,22 @@ class PlanService:
             duration_cell.value = task.duration_minutes if task.duration_minutes > 0 else None
             priority_cell = self.ws[f"{PLAN_PRIORITY_COLUMN}{row}"]
             priority_cell.value = task.priority.value if task.priority != TaskPriority.NONE else None
+            reflection_cell = self.ws[f"{PLAN_REFLECTION_COLUMN}{row}"]
+            reflection_text = (task.reflection or "").strip()
+            reflection_cell.value = reflection_text or None
+            if reflection_text:
+                reflection_cell.font = Font(color=REFLECTION_COLOR, bold=True)
+            else:
+                reflection_cell.font = Font()
             task.row = row
 
         for row in range(PLAN_FIRST_TASK_ROW + len(tasks), max_row_to_clear + 1):
-            for column in (PLAN_TASK_COLUMN, PLAN_DURATION_COLUMN, PLAN_PRIORITY_COLUMN):
+            for column in (
+                PLAN_TASK_COLUMN,
+                PLAN_DURATION_COLUMN,
+                PLAN_PRIORITY_COLUMN,
+                PLAN_REFLECTION_COLUMN,
+            ):
                 cell = self.ws[f"{column}{row}"]
                 cell.value = None
                 cell.font = Font()

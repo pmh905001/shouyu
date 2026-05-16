@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -45,12 +46,9 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QStackedLayout,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtWidgets import QLineEdit
-
 from shouyu.view.duration_dialog import DurationPickerDialog
 
 from shouyu.config import Config
@@ -84,12 +82,6 @@ _COLORS = {
     TaskStatus.DONE: DONE_COLOR_HEX,
 }
 
-_NEXT_STATUS = {
-    TaskStatus.PENDING: TaskStatus.IN_PROGRESS,
-    TaskStatus.IN_PROGRESS: TaskStatus.DONE,
-    TaskStatus.DONE: TaskStatus.PENDING,
-}
-
 _PRIORITY_BADGE = {
     TaskPriority.P1: "🔴 P1",
     TaskPriority.P2: "🟡 P2",
@@ -109,6 +101,8 @@ def _format(task: PlanTask) -> str:
         parts.append(f"   ⏱ {task.duration_minutes}m")
     if task.status == TaskStatus.IN_PROGRESS:
         parts.append("   🎯 重点")
+    if (task.reflection or "").strip():
+        parts.append("   📝")
     return "".join(parts)
 
 
@@ -163,7 +157,6 @@ _RETRY_DELAYS_S = [1, 2, 5, 10, 15]  # ~33s of background retry budget
 def _persist_plan_in_background(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
-    reflection_text: Optional[str] = None,
     yesterday_done_rows: Optional[List[int]] = None,
 ) -> None:
     """Run the openpyxl backup+save on a worker thread; the UI returns instantly.
@@ -178,6 +171,9 @@ def _persist_plan_in_background(
     `yesterday_done_rows`: plan-area row numbers in *yesterday's* worksheet
     that the user just marked as DONE via the carry-over card. Useful for the
     "I forgot to check off this task yesterday" case.
+
+    NOTE: reflections live alongside each task (PlanTask.reflection -> plan
+    sheet column E) now, so there is no separate `reflection_text` channel.
     """
 
     def _stage_changes(excel) -> None:
@@ -189,9 +185,6 @@ def _persist_plan_in_background(
         )
         if new_in_progress is not None and new_in_progress.text != original_in_progress:
             plan.switch_in_progress(new_in_progress)
-        if reflection_text is not None:
-            excel.stage_reflection(reflection_text)
-        # Apply belated DONE marks on yesterday's sheet, if any.
         if yesterday_done_rows:
             yesterday_plan = excel.plan_service_for(AppState.yesterday_str())
             if yesterday_plan is not None:
@@ -315,6 +308,7 @@ def _read_yesterday_snapshot() -> dict:
                 row=t.row,
                 duration_minutes=t.duration_minutes,
                 priority=t.priority,
+                reflection=t.reflection,
             )
             for t in tasks
             if t.status != TaskStatus.DONE
@@ -349,13 +343,10 @@ class HabitDialog(QDialog):
         self._tasks: List[PlanTask] = []
         self._original_in_progress: Optional[str] = None
         self._closing = False
-        self._save_already_dispatched = False
         # Snapshot of the plan state right after the last load from Excel.
         # Used by `_has_unsaved_changes` so Esc / 关闭 can warn the user before
-        # silently dropping their edits. Reflection is tracked separately
-        # because its dirty bit already exists.
+        # silently dropping their edits.
         self._initial_tasks_snapshot: List[tuple] = []
-        self._initial_reflection: str = ""
         # When the user picks "不保存" in the confirmation dialog we still
         # need closeEvent to skip the auto-save it would normally do.
         self._skip_save_on_close = False
@@ -376,12 +367,21 @@ class HabitDialog(QDialog):
             "unfinished": [], "done": 0, "total": 0, "pomodoros": 0,
         }
         self._yesterday_checkboxes: List[QCheckBox] = []
-        self._reflection_dirty = False
         # Tracks Python id() of PlanTask objects we just created via the UI.
         # Used so we can pop the duration picker exactly once after the user
         # finishes typing the new task's name (rather than nagging on every edit).
         self._pending_duration_prompt: set = set()
         self._suppress_advance_once = False
+
+        # Undo / redo. Each entry is a deep snapshot of self._tasks taken
+        # right BEFORE a user-initiated mutation. Ctrl+Z pops from undo and
+        # pushes the current state onto redo; Ctrl+Y / Ctrl+Shift+Z reverses.
+        # Any new mutation clears redo (standard editor semantics).
+        self._undo_stack: List[List[PlanTask]] = []
+        self._redo_stack: List[List[PlanTask]] = []
+        # Guard so undo/redo themselves don't recursively push onto their own
+        # stacks while mutating _tasks.
+        self._in_undo_redo = False
 
         self._build_ui()
         self._install_shortcuts()
@@ -398,11 +398,9 @@ class HabitDialog(QDialog):
         try:
             excel = KbExcel()
             tasks = excel.plan_service().read_plan_tasks()
-            reflection = excel.read_reflection()
         except Exception:
             logging.exception("failed to read plan from Excel")
             tasks = []
-            reflection = ''
 
         if not tasks:
             tasks = [PlanTask(text=t, status=TaskStatus.PENDING) for t in DEFAULT_PLAN_TASKS]
@@ -411,14 +409,13 @@ class HabitDialog(QDialog):
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
 
-        self.reflection_edit.blockSignals(True)
-        self.reflection_edit.setPlainText(reflection)
-        self.reflection_edit.blockSignals(False)
-        self._reflection_dirty = False
-
         # Capture the just-loaded state so we can detect unsaved edits later.
         self._initial_tasks_snapshot = self._snapshot_tasks(self._tasks)
-        self._initial_reflection = reflection or ""
+        # Re-opening the dialog wipes undo history — otherwise Ctrl+Z would
+        # reach back across reload boundaries and try to restore PlanTask
+        # objects whose row/id may have shifted on disk.
+        self._undo_stack.clear()
+        self._redo_stack.clear()
 
         self._render_tasks()
         self._update_stats()
@@ -438,7 +435,6 @@ class HabitDialog(QDialog):
         are never covered by the OS task bar.
         """
         self._closing = False
-        self._save_already_dispatched = False
         self._skip_save_on_close = False
         self._reset_action_buttons()
         self._update_header()
@@ -594,29 +590,16 @@ class HabitDialog(QDialog):
         title.setObjectName("TitleLabel")
         title_row.addWidget(title)
         title_row.addStretch(1)
-
-        add_btn = QPushButton("+ 新增任务")
-        add_btn.setToolTip("Ctrl++ 添加一个任务到当前下方")
-        add_btn.setAutoDefault(False)
-        add_btn.setDefault(False)
-        add_btn.clicked.connect(self._add_new_task)
-        title_row.addWidget(add_btn)
         layout.addLayout(title_row)
 
         hint = QLabel(
             "↑↓ 选择 ·  F2 / 回车 编辑（编辑中再按回车跳到下一项） ·  "
-            "Space 切换状态 ·  Alt+↑↓ 重排 ·  Ctrl+ + 添加 ·  "
-            "Ctrl+ − 删除 ·  右键 → 优先级 / 时长"
+            "Alt+↑↓ 重排 ·  Ctrl+ + 添加 ·  Ctrl+ − 删除 ·  "
+            "Ctrl+Z 撤销 / Ctrl+Y 重做 ·  右键 → 状态 / 优先级 / 时长"
         )
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-
-        # Quick add (Things-3 style): always visible, Enter posts a new task.
-        self.quick_add = QLineEdit()
-        self.quick_add.setPlaceholderText("➕ 快速添加任务并按回车…")
-        self.quick_add.returnPressed.connect(self._on_quick_add_submitted)
-        layout.addWidget(self.quick_add)
 
         # Yesterday carry-over (only shown when there's data to carry).
         self.carryover_card = QFrame()
@@ -660,19 +643,6 @@ class HabitDialog(QDialog):
         self.task_stack.addWidget(self.empty_label)
 
         layout.addWidget(self.task_stack_host, stretch=1)
-
-        # Reflection
-        reflection_title = QLabel("📝 今日反思 (晚上回来再写也行)")
-        reflection_title.setObjectName("SubtitleLabel")
-        layout.addWidget(reflection_title)
-
-        self.reflection_edit = QTextEdit()
-        self.reflection_edit.setPlaceholderText(
-            "今天最有成就感的一件事？哪个任务卡住了，下次怎么避免？"
-        )
-        self.reflection_edit.setFixedHeight(96)
-        self.reflection_edit.textChanged.connect(self._on_reflection_changed)
-        layout.addWidget(self.reflection_edit)
 
         # Day-end review: estimated vs actual (pomodoros). Hidden until there's
         # data worth showing, so it doesn't clutter the morning view.
@@ -741,6 +711,9 @@ class HabitDialog(QDialog):
             item.setFlags(flags)
             item.setData(_TASK_ROLE, task)
             _apply_item_style(item, task.status)
+            reflection = (task.reflection or "").strip()
+            if reflection:
+                item.setToolTip(f"📝 反思\n\n{reflection}")
             self.list_widget.addItem(item)
         self.list_widget.blockSignals(False)
         if self.list_widget.count() > 0:
@@ -919,8 +892,11 @@ class HabitDialog(QDialog):
         # / Enter here — those must reach the inline editor when one is open.
         # The "Enter to start editing the current row" affordance is bound to
         # the list_widget itself with WidgetShortcut context below.
+        #
+        # Space-to-cycle-status was removed on purpose: users found it too
+        # easy to flip a task's state accidentally while navigating. Status
+        # changes now go exclusively through the right-click context menu.
         window_bindings = [
-            ("Space", self._cycle_status),
             ("F2", self._edit_selected),
             ("Alt+Up", lambda: self._move(-1)),
             ("Alt+Down", lambda: self._move(1)),
@@ -931,8 +907,10 @@ class HabitDialog(QDialog):
             ("Ctrl+Minus", self._delete_selected),
             ("Ctrl+Return", self._save_and_accept),
             ("Ctrl+Enter", self._save_and_accept),
-            ("Ctrl+L", self._quick_add_focus),
             ("Ctrl+P", self._focus_pomodoro_on_selected),
+            ("Ctrl+Z", self._undo),
+            ("Ctrl+Y", self._redo),
+            ("Ctrl+Shift+Z", self._redo),
             ("Escape", self.reject),
         ]
         for sequence, callback in window_bindings:
@@ -959,10 +937,12 @@ class HabitDialog(QDialog):
                 text = text[len(glyph):]
                 break
         text = text.lstrip()
-        # Strip trailing badges that we add ("🔴", "⏱", "🎯") so user editing stays sane.
-        # Find earliest match — everything from there onwards is decoration.
+        # Strip trailing badges we appended ("🔴", "⏱", "🎯", "📝") so the
+        # text the editor commits doesn't carry the decorations back into
+        # PlanTask.text. Find earliest match — everything from there
+        # onwards is decoration.
         first_marker = -1
-        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪"):
+        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪", "   📝"):
             idx = text.find(marker)
             if idx >= 0 and (first_marker < 0 or idx < first_marker):
                 first_marker = idx
@@ -976,7 +956,14 @@ class HabitDialog(QDialog):
         delegate's `closeEditor` signal (so we know the editor really closed)."""
         index = self.list_widget.row(item)
         if 0 <= index < len(self._tasks):
-            self._tasks[index].text = self._strip_glyph(item.text())
+            new_text = self._strip_glyph(item.text())
+            if self._tasks[index].text == new_text:
+                # _refresh_item runs unconditionally below so we still call it
+                # to clean up any stray decorations the editor may have left.
+                self._refresh_item(index)
+                return
+            self._push_undo()
+            self._tasks[index].text = new_text
             self._refresh_item(index)
             self._update_stats()
 
@@ -1018,6 +1005,7 @@ class HabitDialog(QDialog):
                     parent=self,
                 )
                 if value > 0:
+                    self._push_undo()
                     task.duration_minutes = value
                     self._refresh_item(index)
                     self._update_stats()
@@ -1032,6 +1020,10 @@ class HabitDialog(QDialog):
             0 <= index < len(self._tasks)
             and (self._tasks[index].text or "").strip()
         ):
+            # Auto-extending the list with a new blank row is a mutation —
+            # make it undoable so Ctrl+Z removes the empty placeholder
+            # without the user having to manually delete it.
+            self._push_undo()
             new_task = PlanTask(text="", status=TaskStatus.PENDING)
             self._pending_duration_prompt.add(id(new_task))
             self._tasks.append(new_task)
@@ -1059,45 +1051,158 @@ class HabitDialog(QDialog):
         item.setText(_format(task))
         _apply_item_style(item, task.status)
         item.setData(_TASK_ROLE, task)
+        reflection = (task.reflection or "").strip()
+        item.setToolTip(f"📝 反思\n\n{reflection}" if reflection else "")
         self.list_widget.blockSignals(False)
 
-    def _cycle_status(self) -> None:
+    # ---------- undo / redo ----------
+
+    @staticmethod
+    def _clone_tasks(tasks: List[PlanTask]) -> List[PlanTask]:
+        return [
+            PlanTask(
+                text=t.text,
+                status=t.status,
+                row=t.row,
+                duration_minutes=t.duration_minutes,
+                priority=t.priority,
+                reflection=t.reflection,
+            )
+            for t in tasks
+        ]
+
+    def _push_undo(self) -> None:
+        """Snapshot the current task list before a user-initiated mutation.
+
+        Called from every public mutation entry point (add / delete / move /
+        edit / status / priority / duration / reflection / carry-over /
+        focus-pomodoro / drag-reorder). Mutations triggered while replaying
+        an undo or redo are skipped so the two stacks don't fight.
+        """
+        if self._in_undo_redo:
+            return
+        self._undo_stack.append(self._clone_tasks(self._tasks))
+        # Cap the history so a long editing session can't bloat memory. 100
+        # steps is plenty for this kind of UI.
+        if len(self._undo_stack) > 100:
+            del self._undo_stack[0:len(self._undo_stack) - 100]
+        self._redo_stack.clear()
+
+    def _undo(self) -> None:
+        if not self._undo_stack:
+            return
+        self._in_undo_redo = True
+        try:
+            self._redo_stack.append(self._clone_tasks(self._tasks))
+            self._tasks = self._undo_stack.pop()
+            self._original_in_progress = next(
+                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
+                None,
+            )
+            self._render_tasks()
+            self._update_stats()
+        finally:
+            self._in_undo_redo = False
+
+    def _redo(self) -> None:
+        if not self._redo_stack:
+            return
+        self._in_undo_redo = True
+        try:
+            self._undo_stack.append(self._clone_tasks(self._tasks))
+            self._tasks = self._redo_stack.pop()
+            self._original_in_progress = next(
+                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
+                None,
+            )
+            self._render_tasks()
+            self._update_stats()
+        finally:
+            self._in_undo_redo = False
+
+    # ---------- status / mutation ----------
+
+    def _set_status(self, new_status: TaskStatus) -> None:
+        """Set the selected task's status. Replaces the old Space-cycle flow.
+
+        When transitioning into DONE we offer a (skippable) reflection prompt
+        so users can capture lessons learned right at the moment the task is
+        marked complete.
+        """
         index = self.list_widget.currentRow()
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
-        next_status = _NEXT_STATUS[task.status]
-        if next_status == TaskStatus.IN_PROGRESS:
+        if task.status == new_status:
+            return
+        self._push_undo()
+        if new_status == TaskStatus.IN_PROGRESS:
             for other in self._tasks:
                 if other is not task and other.status == TaskStatus.IN_PROGRESS:
                     other.status = TaskStatus.PENDING
-        task.status = next_status
+        task.status = new_status
         self._render_tasks()
         self.list_widget.setCurrentRow(index)
         self._update_stats()
+        if new_status == TaskStatus.DONE:
+            # Prompt is intentionally non-blocking-feeling: cancelling just
+            # skips the reflection, the DONE state is already committed.
+            self._prompt_reflection_for(index)
+
+    def _prompt_reflection_for(self, index: int) -> None:
+        if not (0 <= index < len(self._tasks)):
+            return
+        task = self._tasks[index]
+        text, ok = QInputDialog.getMultiLineText(
+            self,
+            "记录反思（可跳过）",
+            f"完成了「{task.text or '（空任务）'}」想留下点什么？\n"
+            "卡在哪？哪步可以下次做得更好？空着按确定也行。",
+            task.reflection or "",
+        )
+        if not ok:
+            return
+        new_reflection = text.strip()
+        if new_reflection == (task.reflection or "").strip():
+            return
+        # Treat reflection edits as a separate undoable step so users can
+        # Ctrl+Z back to "DONE but no reflection" without losing the status flip.
+        self._push_undo()
+        task.reflection = new_reflection
+        self._refresh_item(index)
 
     def _move(self, offset: int) -> None:
         index = self.list_widget.currentRow()
         new_index = index + offset
         if not (0 <= index < len(self._tasks)) or not (0 <= new_index < len(self._tasks)):
             return
+        self._push_undo()
         self._tasks[index], self._tasks[new_index] = self._tasks[new_index], self._tasks[index]
         self._render_tasks()
         self.list_widget.setCurrentRow(new_index)
 
     def _on_rows_moved(self, *args) -> None:
         # Rebuild self._tasks to match the new visual order using PlanTask refs
-        # we stashed in _TASK_ROLE.
+        # we stashed in _TASK_ROLE. Drag-reorder is also undoable, but the
+        # snapshot must be of the *pre-drag* state — Qt has already mutated
+        # the list widget by the time this signal fires, so we reconstruct
+        # the old order by reversing the move logged in `args`.
         new_order: List[PlanTask] = []
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
             task = item.data(_TASK_ROLE)
             if isinstance(task, PlanTask):
                 new_order.append(task)
-        if len(new_order) == len(self._tasks):
+        if len(new_order) == len(self._tasks) and new_order != self._tasks:
+            # Snapshot before swap so Ctrl+Z restores the original order.
+            self._undo_stack.append(self._clone_tasks(self._tasks))
+            if len(self._undo_stack) > 100:
+                del self._undo_stack[0:len(self._undo_stack) - 100]
+            self._redo_stack.clear()
             self._tasks = new_order
 
     def _add_new_task(self, text: str = "") -> None:
+        self._push_undo()
         new_task = PlanTask(text=text, status=TaskStatus.PENDING)
         self._pending_duration_prompt.add(id(new_task))
         index = self.list_widget.currentRow()
@@ -1114,17 +1219,12 @@ class HabitDialog(QDialog):
             QTimer.singleShot(0, lambda r=target: self._edit_row(r))
 
     def _delete_selected(self) -> None:
+        # No confirmation dialog by design — Ctrl+Z restores the task,
+        # which is faster and less interruptive than a yes/no popup.
         index = self.list_widget.currentRow()
         if not (0 <= index < len(self._tasks)):
             return
-        text = self._tasks[index].text or "（空任务）"
-        confirm = QMessageBox.question(
-            self,
-            "删除任务",
-            f"确定要删除「{text}」吗？此操作不可撤销。",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+        self._push_undo()
         self._tasks.pop(index)
         self._render_tasks()
         if self._tasks:
@@ -1136,8 +1236,30 @@ class HabitDialog(QDialog):
         menu = QMenu(self.list_widget)
         if item is not None:
             self.list_widget.setCurrentItem(item)
+            task = self._tasks[self.list_widget.currentRow()] \
+                if 0 <= self.list_widget.currentRow() < len(self._tasks) else None
             menu.addAction("编辑  (F2 / Enter)", self._edit_selected)
-            menu.addAction("切换状态  (Space)", self._cycle_status)
+            # Status submenu replaces the old Space cycle. Each item is a
+            # direct "go to this state" — clearer than a one-way cycle.
+            status_menu = menu.addMenu("🚥 状态")
+            pending_act = status_menu.addAction(
+                "○  待办", lambda: self._set_status(TaskStatus.PENDING)
+            )
+            in_progress_act = status_menu.addAction(
+                "▶  进行中", lambda: self._set_status(TaskStatus.IN_PROGRESS)
+            )
+            done_act = status_menu.addAction(
+                "✓  已完成（写反思）", lambda: self._set_status(TaskStatus.DONE)
+            )
+            if task is not None:
+                pending_act.setCheckable(True)
+                in_progress_act.setCheckable(True)
+                done_act.setCheckable(True)
+                pending_act.setChecked(task.status == TaskStatus.PENDING)
+                in_progress_act.setChecked(task.status == TaskStatus.IN_PROGRESS)
+                done_act.setChecked(task.status == TaskStatus.DONE)
+            if task is not None and task.status == TaskStatus.DONE:
+                menu.addAction("📝 编辑反思…", lambda: self._edit_reflection_for_selected())
             menu.addAction("🍅 专注此项  (Ctrl+P)", self._focus_pomodoro_on_selected)
             menu.addAction("⏱ 设置时长…", self._set_duration_for_selected)
             priority_menu = menu.addMenu("🚦 优先级")
@@ -1152,12 +1274,23 @@ class HabitDialog(QDialog):
         menu.addAction("新增任务  (Ctrl+ +)", self._add_new_task)
         if item is not None:
             menu.addAction("删除任务  (Ctrl+ −)", self._delete_selected)
+        menu.addSeparator()
+        undo_act = menu.addAction("撤销  (Ctrl+Z)", self._undo)
+        undo_act.setEnabled(bool(self._undo_stack))
+        redo_act = menu.addAction("重做  (Ctrl+Y)", self._redo)
+        redo_act.setEnabled(bool(self._redo_stack))
         menu.exec(self.list_widget.mapToGlobal(pos))
+
+    def _edit_reflection_for_selected(self) -> None:
+        self._prompt_reflection_for(self.list_widget.currentRow())
 
     def _set_priority(self, priority: TaskPriority) -> None:
         index = self.list_widget.currentRow()
         if not (0 <= index < len(self._tasks)):
             return
+        if self._tasks[index].priority == priority:
+            return
+        self._push_undo()
         self._tasks[index].priority = priority
         self._refresh_item(index)
         self._update_stats()
@@ -1174,36 +1307,12 @@ class HabitDialog(QDialog):
         )
         if value < 0:
             return
+        if value == task.duration_minutes:
+            return
+        self._push_undo()
         task.duration_minutes = value
         self._refresh_item(index)
         self._update_stats()
-
-    # ---------- quick add ----------
-
-    def _quick_add_focus(self) -> None:
-        self.quick_add.setFocus()
-        self.quick_add.selectAll()
-
-    def _on_quick_add_submitted(self) -> None:
-        text = (self.quick_add.text() or "").strip()
-        if not text:
-            return
-        self.quick_add.clear()
-        new_task = PlanTask(text=text, status=TaskStatus.PENDING)
-        self._tasks.append(new_task)
-        self._render_tasks()
-        new_row = len(self._tasks) - 1
-        self.list_widget.setCurrentRow(new_row)
-        self._update_stats()
-        # Quick-add already gave us the text — go straight to the duration picker.
-        if Config.auto_prompt_duration_for_new_tasks():
-            value = DurationPickerDialog.get_duration(
-                current=30, task_text=text, parent=self
-            )
-            if value > 0:
-                new_task.duration_minutes = value
-                self._refresh_item(new_row)
-                self._update_stats()
 
     # ---------- carry-over ----------
 
@@ -1244,17 +1353,22 @@ class HabitDialog(QDialog):
             self._render_yesterday({"unfinished": [], "done": 0, "total": 0, "pomodoros": 0})
             return
         existing_texts = {(t.text or "").strip() for t in self._tasks if (t.text or "").strip()}
+        will_add = [
+            t for t in chosen
+            if (t.text or "").strip() and (t.text or "").strip() not in existing_texts
+        ]
+        if will_add:
+            self._push_undo()
         added = 0
-        for task in chosen:
+        for task in will_add:
             text = (task.text or "").strip()
-            if not text or text in existing_texts:
-                continue
             self._tasks.append(
                 PlanTask(
                     text=task.text,
                     status=TaskStatus.PENDING,
                     duration_minutes=task.duration_minutes,
                     priority=task.priority,
+                    reflection=task.reflection,
                 )
             )
             existing_texts.add(text)
@@ -1273,6 +1387,8 @@ class HabitDialog(QDialog):
         if not (0 <= index < len(self._tasks)):
             return
         task = self._tasks[index]
+        if task.status != TaskStatus.IN_PROGRESS:
+            self._push_undo()
         # promote to in_progress
         for other in self._tasks:
             if other is not task and other.status == TaskStatus.IN_PROGRESS:
@@ -1294,11 +1410,6 @@ class HabitDialog(QDialog):
                 logging.exception("failed to start pomodoro for selected task")
 
         QTimer.singleShot(50, _kick)
-
-    # ---------- reflection ----------
-
-    def _on_reflection_changed(self) -> None:
-        self._reflection_dirty = True
 
     # ---------- stats / header ----------
 
@@ -1488,27 +1599,15 @@ class HabitDialog(QDialog):
         QTimer.singleShot(0, self.accept)
 
     def _dispatch_save(self) -> None:
-        if self._save_already_dispatched:
-            return
-        self._save_already_dispatched = True
-        tasks_snapshot = [
-            PlanTask(
-                text=t.text,
-                status=t.status,
-                row=t.row,
-                duration_minutes=t.duration_minutes,
-                priority=t.priority,
-            )
-            for t in self._tasks
-        ]
-        reflection = (
-            self.reflection_edit.toPlainText() if self._reflection_dirty else None
-        )
+        # Previously this short-circuited via a `_save_already_dispatched`
+        # flag — that meant any second call (e.g. close-after-focus-pomodoro)
+        # silently dropped subsequent edits. Each dispatch now spawns its own
+        # worker; the writes are idempotent so overlapping retries are fine.
+        tasks_snapshot = self._clone_tasks(self._tasks)
         yesterday_done_rows = sorted(self._yesterday_marked_done_rows)
         _persist_plan_in_background(
             tasks_snapshot,
             self._original_in_progress,
-            reflection,
             yesterday_done_rows,
         )
 
@@ -1531,6 +1630,7 @@ class HabitDialog(QDialog):
                 t.status,
                 int(t.duration_minutes or 0),
                 t.priority,
+                (t.reflection or "").strip(),
             ))
         return out
 
@@ -1539,10 +1639,6 @@ class HabitDialog(QDialog):
             return True
         if self._yesterday_marked_done_rows:
             return True
-        if self._reflection_dirty:
-            current = self.reflection_edit.toPlainText() or ""
-            if current != (self._initial_reflection or ""):
-                return True
         return False
 
     def _confirm_unsaved_then_close(self) -> None:
