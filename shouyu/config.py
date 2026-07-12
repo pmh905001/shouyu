@@ -97,10 +97,26 @@ class Config:
 
     @classmethod
     def pomodoro_idle_warning_seconds(cls):
-        """Idle threshold (in seconds) before the working-phase 🍅 starts
-        blinking as a "stop drifting" nudge. Counts both mouse and keyboard
-        inactivity. Set to 0 to disable. Default: 300 (5 minutes)."""
-        return int(cls.get('idle_warning_seconds', '300', 'pomodoro'))
+        """Level-1 idle threshold (seconds): the working-phase 🍅 starts a
+        silent blink as a "stop drifting" nudge. Counts both mouse and
+        keyboard inactivity. Set to 0 to disable. Default: 60."""
+        return int(cls.get('idle_warning_seconds', '60', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_idle_alarm_seconds(cls):
+        """Level-2 (hard) idle threshold (seconds): escalate to a loud alarm
+        — beep repeatedly, force the (possibly hidden) window back to the
+        front, and require an explicit "我回来了" click to dismiss (which is
+        recorded as a drift). Should be >= idle_warning_seconds. Set to 0 to
+        disable escalation. Default: 120."""
+        return int(cls.get('idle_alarm_seconds', '120', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_idle_drifts_before_break(cls):
+        """How many hard-alarm drifts within a single working phase are
+        tolerated before we conclude you actually need rest and force a
+        short break. Set to 0 to disable the forced break. Default: 3."""
+        return int(cls.get('idle_drifts_before_break', '3', 'pomodoro'))
 
     @classmethod
     def pomodoro_default_mode(cls):

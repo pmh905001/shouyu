@@ -79,9 +79,16 @@ class PomodoroService:
         self._state_lock = threading.RLock()
         # Idle-monitor lives for the whole process lifetime; it self-checks
         # `_phase` on each tick so we don't need to start/stop it on phase
-        # transitions. Tracks whether we've already emitted the "warning on"
-        # event so we don't spam the UI on every tick.
-        self._idle_warning_active = False
+        # transitions.
+        #   _idle_level: 0 = clear, 1 = soft blink, 2 = hard alarm.
+        #   _idle_ack_needed: while True the hard alarm stays up until the
+        #     user explicitly clicks "我回来了" — moving the mouse alone will
+        #     NOT silence it (that's the whole point: make ignoring it cost).
+        #   _current_phase_drifts: hard-alarm count within the current
+        #     working phase; drives the "you actually need rest" forced break.
+        self._idle_level = 0
+        self._idle_ack_needed = False
+        self._current_phase_drifts = 0
         # Restore last-used mode (classic / deep) so it persists across
         # launches, falling back to the kb.ini default_mode when the user has
         # never toggled it.
@@ -202,6 +209,23 @@ class PomodoroService:
             logging.exception("failed to persist pomodoro mode")
         self._emit("mode_changed", mode)
 
+    def acknowledge_idle(self) -> None:
+        """Explicit "我回来了" acknowledgement of the hard idle alarm.
+
+        This is the only thing that silences a level-2 alarm — moving the
+        mouse won't. Clicking it counts as physically committing to come
+        back, and (because the click itself is input) naturally resets the
+        idle timer.
+        """
+        should_emit = False
+        with self._state_lock:
+            if self._idle_level > 0 or self._idle_ack_needed:
+                self._idle_level = 0
+                self._idle_ack_needed = False
+                should_emit = True
+        if should_emit:
+            self._emit("idle_warning_off", "")
+
     def skip_break(self) -> bool:
         """Skip the current break and start a new work phase. Logged in stats."""
         with self._state_lock:
@@ -257,6 +281,8 @@ class PomodoroService:
             self._refresh_current_task_text_locked()
             if phase == Phase.WORKING:
                 self._current_task_started_at = time.time()
+                # Fresh focus block -> reset the drift budget.
+                self._current_phase_drifts = 0
             self._spawn_timer_thread_locked()
         self._emit(
             "started",
@@ -399,43 +425,93 @@ class PomodoroService:
 
     # ---------- idle monitor ----------
 
+    _ALARM_BEEP_INTERVAL = 5.0  # seconds between nag-beeps while un-acknowledged
+
+    def _clear_idle_state(self) -> None:
+        """Reset any active idle warning/alarm and tell the UI to stop."""
+        if self._idle_level > 0 or self._idle_ack_needed:
+            self._idle_level = 0
+            self._idle_ack_needed = False
+            self._emit("idle_warning_off", "")
+
+    def _enter_idle_alarm(self, idle: int) -> None:
+        """Escalate to the hard alarm: count the drift, and either force a
+        break (if you've drifted too many times this phase) or raise the
+        loud, must-acknowledge alarm."""
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.increment_today_counter('focus_drifts')
+        except Exception:
+            logging.exception("idle monitor: failed to log focus drift")
+
+        with self._state_lock:
+            self._current_phase_drifts += 1
+            phase_drifts = self._current_phase_drifts
+
+        try:
+            limit = Config.pomodoro_idle_drifts_before_break()
+        except Exception:
+            limit = 0
+        if limit > 0 and phase_drifts >= limit:
+            # You've drifted this many times in one block — you don't need
+            # more nagging, you need rest. Force a short break.
+            self._idle_level = 0
+            self._idle_ack_needed = False
+            self._emit("idle_warning_off", "")
+            with self._state_lock:
+                self._task_text_override = "🚑 反复走神，先休息一下再回来"
+            self._begin_phase(Phase.SHORT_BREAK)
+            return
+
+        self._idle_level = 2
+        self._idle_ack_needed = True
+        self._emit("idle_alarm_on", str(int(idle)))
+
     def _idle_monitor_loop(self) -> None:
-        """Watch global input idle time; nudge the UI when the user is
-        drifting off during a working pomodoro.
+        """Watch global input idle time and escalate when the user drifts off
+        during a working pomodoro.
 
-        Self-contained — checks `_phase` every tick and gates the warning
-        on `Phase.WORKING`. Pause / stop / break phases automatically clear
-        any active warning, so the UI never gets stuck in the "blinking"
-        state across phase transitions.
+        Two levels:
+          * Level 1 (>= idle_warning_seconds): silent blink; clears by itself
+            once the user moves again.
+          * Level 2 (>= idle_alarm_seconds): a hard alarm that beeps every
+            few seconds and stays up until an explicit "我回来了" click —
+            moving the mouse alone will NOT silence it. Each alarm is counted
+            as a drift; enough drifts in one phase forces a break.
 
-        Polling interval is 1s, which is far below the threshold (default
-        300s) and uses a syscall (`GetLastInputInfo`) measured in
-        microseconds — overhead is negligible.
+        Self-contained: checks `_phase` every tick and gates everything on
+        `Phase.WORKING`. Pause / stop / break phases clear any active
+        warning, so the UI never gets stuck blinking across transitions.
         """
         from shouyu.util.idle import seconds_since_last_input
 
+        last_beep = 0.0
         while True:
             time.sleep(1.0)
             try:
-                threshold = Config.pomodoro_idle_warning_seconds()
+                warn_t = Config.pomodoro_idle_warning_seconds()
+                alarm_t = Config.pomodoro_idle_alarm_seconds()
             except Exception:
-                logging.exception("idle monitor: failed to read threshold")
-                threshold = 0
-            if threshold <= 0:
-                # Disabled. Make sure we're not leaving the UI in the
-                # blinking state if the user just turned the feature off.
-                if self._idle_warning_active:
-                    self._idle_warning_active = False
-                    self._emit("idle_warning_off", "")
-                continue
+                logging.exception("idle monitor: failed to read thresholds")
+                warn_t, alarm_t = 0, 0
 
             with self._state_lock:
                 phase = self._phase
 
-            if phase != Phase.WORKING:
-                if self._idle_warning_active:
-                    self._idle_warning_active = False
-                    self._emit("idle_warning_off", "")
+            # Feature disabled, or not in a working phase -> clear and idle.
+            if warn_t <= 0 or phase != Phase.WORKING:
+                self._clear_idle_state()
+                continue
+
+            # A hard alarm is up and un-acknowledged: keep nagging with sound
+            # regardless of whether the mouse has since moved. Only the
+            # explicit acknowledge (or a phase change) clears it.
+            if self._idle_ack_needed:
+                now = time.time()
+                if now - last_beep >= self._ALARM_BEEP_INTERVAL:
+                    _beep_async()
+                    last_beep = now
                 continue
 
             try:
@@ -444,9 +520,16 @@ class PomodoroService:
                 logging.exception("idle monitor: failed to read idle time")
                 continue
 
-            if not self._idle_warning_active and idle >= threshold:
-                self._idle_warning_active = True
+            # Level 2: escalate to the hard alarm.
+            if alarm_t > 0 and idle >= alarm_t and self._idle_level < 2:
+                self._enter_idle_alarm(int(idle))
+                last_beep = time.time()
+                continue
+
+            # Level 1: soft blink, auto-clears when the user comes back.
+            if self._idle_level == 0 and idle >= warn_t:
+                self._idle_level = 1
                 self._emit("idle_warning_on", str(int(idle)))
-            elif self._idle_warning_active and idle < threshold:
-                self._idle_warning_active = False
+            elif self._idle_level == 1 and idle < warn_t:
+                self._idle_level = 0
                 self._emit("idle_warning_off", "")

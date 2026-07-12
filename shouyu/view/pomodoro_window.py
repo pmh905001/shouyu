@@ -101,6 +101,9 @@ class PomodoroWindow(QWidget):
         self._blink_on = False
         self._blink_idle_seconds = 0
         self._idle_warning_active = False
+        # True only during the level-2 hard alarm (faster blink + ack button
+        # + window forced to front). Level-1 soft blink leaves this False.
+        self._alarm_active = False
         # Cached so we can restore exactly what we had after blink ends —
         # the phase may switch while idle (e.g. work → break would also
         # clear the warning), and we want to reflect whatever the latest
@@ -185,6 +188,17 @@ class PomodoroWindow(QWidget):
 
         button_row = QHBoxLayout()
         button_row.setSpacing(6)
+
+        # Shown only during a hard idle alarm. It is the ONLY way to silence
+        # the alarm — deliberately prominent (red) so it can't be ignored.
+        self.ack_btn = QPushButton("✋ 我回来了")
+        self.ack_btn.setToolTip("停止警报并记一次走神")
+        self.ack_btn.setCursor(Qt.PointingHandCursor)
+        self.ack_btn.setStyleSheet(self._ack_button_style())
+        self.ack_btn.clicked.connect(self._on_ack_clicked)
+        self.ack_btn.setVisible(False)
+        button_row.addWidget(self.ack_btn)
+
         self.toggle_btn = QPushButton("暂停")
         self.toggle_btn.setStyleSheet(self._button_style())
         self.toggle_btn.clicked.connect(self._on_toggle_clicked)
@@ -228,6 +242,21 @@ class PomodoroWindow(QWidget):
             "  font-size: 11px;"
             "}"
             "QPushButton:hover { background-color: rgba(255,255,255,0.18); }"
+        )
+
+    @staticmethod
+    def _ack_button_style() -> str:
+        return (
+            "QPushButton {"
+            "  background-color: #FF3B30;"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 5px;"
+            "  padding: 3px 8px;"
+            "  font-size: 11px;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:hover { background-color: #FF5A50; }"
         )
 
     def _move_to_default_corner(self) -> None:
@@ -291,6 +320,12 @@ class PomodoroWindow(QWidget):
             except ValueError:
                 idle_seconds = 0
             self._start_blink(idle_seconds)
+        elif event == "idle_alarm_on":
+            try:
+                idle_seconds = int(payload)
+            except ValueError:
+                idle_seconds = 0
+            self._start_alarm(idle_seconds)
         elif event == "idle_warning_off":
             self._stop_blink()
 
@@ -379,6 +414,11 @@ class PomodoroWindow(QWidget):
 
         PomodoroService.instance().skip_break()
 
+    def _on_ack_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        PomodoroService.instance().acknowledge_idle()
+
     def _on_toggle_mode_clicked(self) -> None:
         from shouyu.service.pomodoro import PomodoroService
 
@@ -422,6 +462,7 @@ class PomodoroWindow(QWidget):
         than nudging here.
         """
         self._idle_warning_active = True
+        self._alarm_active = False
         self._blink_idle_seconds = idle_seconds
         minutes = max(1, idle_seconds // 60)
         self.phase_label.setText(f"⚠ 已静止 {minutes}m")
@@ -429,15 +470,47 @@ class PomodoroWindow(QWidget):
             f"color: {self._ALERT_RED}; font-size: 12px; font-weight: 700;"
         )
         self._apply_card_alert_style(True)
+        self._blink_timer.setInterval(500)
         self._blink_on = True
         self._on_blink_tick()  # flip immediately, don't wait 500ms
         self._blink_timer.start()
+
+    def _start_alarm(self, idle_seconds: int) -> None:
+        """Enter the hard, un-ignorable alarm mode (level 2).
+
+        Unlike the soft blink, this:
+          * forces the window back on-screen and to the front even if the
+            user had hidden it (respecting the hide gesture is no longer more
+            important than getting you back to work);
+          * blinks faster (250ms) and shows a louder "🚨 快回来工作" label;
+          * surfaces the red "✋ 我回来了" button, which is the only way to
+            dismiss it (moving the mouse won't).
+        """
+        self._idle_warning_active = True
+        self._alarm_active = True
+        self._blink_idle_seconds = idle_seconds
+        minutes = max(1, idle_seconds // 60)
+        self.phase_label.setText(f"🚨 快回来工作 {minutes}m")
+        self.phase_label.setStyleSheet(
+            f"color: {self._ALERT_RED}; font-size: 12px; font-weight: 800;"
+        )
+        self.ack_btn.setVisible(True)
+        self._apply_card_alert_style(True)
+        self._blink_timer.setInterval(250)
+        self._blink_on = True
+        self._on_blink_tick()
+        self._blink_timer.start()
+        # Force the window back so it can't be ignored from behind other apps.
+        self.summon()
 
     def _stop_blink(self) -> None:
         if not self._idle_warning_active and not self._blink_timer.isActive():
             return
         self._blink_timer.stop()
+        self._blink_timer.setInterval(500)
         self._idle_warning_active = False
+        self._alarm_active = False
+        self.ack_btn.setVisible(False)
         # Restore phase label from what _set_phase last cached.
         self.phase_label.setText(self._normal_phase_text)
         self.phase_label.setStyleSheet(
@@ -494,6 +567,9 @@ class PomodoroWindow(QWidget):
             skipped = AppState.get_today_counter('breaks_skipped')
             if skipped:
                 text += f"  · 跳休 {skipped}"
+            drifts = AppState.get_today_counter('focus_drifts')
+            if drifts:
+                text += f"  · 走神 {drifts}"
         except Exception:
             pass
         return text
