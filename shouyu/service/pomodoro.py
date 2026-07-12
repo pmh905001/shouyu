@@ -27,9 +27,11 @@ from shouyu.config import Config
 
 class Phase(str, Enum):
     IDLE = "idle"
+    PLANNING = "planning"
     WORKING = "working"
     SHORT_BREAK = "short_break"
     LONG_BREAK = "long_break"
+    LUNCH_BREAK = "lunch_break"
     PAUSED = "paused"
 
 
@@ -80,12 +82,19 @@ class PomodoroService:
         # transitions. Tracks whether we've already emitted the "warning on"
         # event so we don't spam the UI on every tick.
         self._idle_warning_active = False
-        # Restore last-used mode (classic / deep) so it persists across launches.
-        self._mode: str = self.MODE_CLASSIC
+        # Restore last-used mode (classic / deep) so it persists across
+        # launches, falling back to the kb.ini default_mode when the user has
+        # never toggled it.
+        try:
+            default_mode = Config.pomodoro_default_mode()
+        except Exception:
+            logging.exception("failed to read default pomodoro mode from config")
+            default_mode = self.MODE_CLASSIC
+        self._mode: str = default_mode
         try:
             from shouyu.util.state import AppState
 
-            self._mode = AppState.pomodoro_mode()
+            self._mode = AppState.pomodoro_mode(default_mode)
         except Exception:
             logging.exception("failed to read pomodoro mode from state")
 
@@ -115,6 +124,15 @@ class PomodoroService:
             with self._state_lock:
                 self._task_text_override = task_text
         self._begin_phase(Phase.WORKING)
+
+    def start_planning(self, task_text: Optional[str] = None) -> None:
+        """Start the morning planning session: a short block to lay out the
+        day's tasks. Followed automatically by a short planning break."""
+        if not Config.pomodoro_enabled():
+            return
+        with self._state_lock:
+            self._task_text_override = task_text or "📋 规划今日最重要的 3 件事"
+        self._begin_phase(Phase.PLANNING)
 
     def start_short_break(self) -> None:
         self._begin_phase(Phase.SHORT_BREAK)
@@ -214,8 +232,21 @@ class PomodoroService:
 
     # ---------- internals ----------
 
-    def _begin_phase(self, phase: Phase) -> None:
-        duration = self._duration_for(phase)
+    def _begin_phase(self, phase: Phase, duration_override: Optional[int] = None) -> None:
+        # Lunch guard: never let a focused (working / planning) phase run
+        # during the configured lunch window. Convert it into a lunch break
+        # that lasts until lunch ends; work/planning resumes afterwards.
+        if phase in (Phase.WORKING, Phase.PLANNING):
+            lunch_remaining = self._seconds_until_lunch_end()
+            if lunch_remaining > 0:
+                phase = Phase.LUNCH_BREAK
+                duration_override = lunch_remaining
+                with self._state_lock:
+                    self._task_text_override = None
+
+        duration = (
+            duration_override if duration_override is not None else self._duration_for(phase)
+        )
         if duration <= 0:
             return
         with self._state_lock:
@@ -232,8 +263,31 @@ class PomodoroService:
             f"{phase.value}:{duration}:{self._current_task_text}",
         )
 
+    def _seconds_until_lunch_end(self) -> int:
+        """If we're currently inside the configured lunch window, return the
+        seconds remaining until it ends; otherwise 0."""
+        try:
+            if not Config.pomodoro_lunch_enabled():
+                return 0
+            start = Config.pomodoro_lunch_start()
+            end = Config.pomodoro_lunch_end()
+        except Exception:
+            logging.exception("failed to read lunch window config")
+            return 0
+        if not start or not end:
+            return 0
+        now = time.localtime()
+        now_minutes = now.tm_hour * 60 + now.tm_min
+        start_minutes = start[0] * 60 + start[1]
+        end_minutes = end[0] * 60 + end[1]
+        if start_minutes <= now_minutes < end_minutes:
+            return (end_minutes - now_minutes) * 60 - now.tm_sec
+        return 0
+
     def _duration_for(self, phase: Phase) -> int:
         deep = self._mode == self.MODE_DEEP
+        if phase == Phase.PLANNING:
+            return Config.pomodoro_planning_session_minutes() * 60
         if phase == Phase.WORKING:
             mins = Config.pomodoro_deep_work_minutes() if deep else Config.pomodoro_work_minutes()
             return mins * 60
@@ -295,7 +349,13 @@ class PomodoroService:
 
     def _on_phase_finished(self, finished_phase: Phase) -> None:
         _beep_async()
-        if finished_phase == Phase.WORKING:
+        if finished_phase == Phase.PLANNING:
+            # Planning done -> short planning break, then normal work.
+            self._begin_phase(
+                Phase.SHORT_BREAK,
+                duration_override=Config.pomodoro_planning_break_minutes() * 60,
+            )
+        elif finished_phase == Phase.WORKING:
             self._record_pomodoro_completion()
             with self._state_lock:
                 self._completed_today += 1
@@ -306,6 +366,7 @@ class PomodoroService:
             else:
                 self._begin_phase(Phase.SHORT_BREAK)
         else:
+            # short_break / long_break / lunch_break -> back to work
             self._begin_phase(Phase.WORKING)
 
     def _record_pomodoro_completion(self) -> None:

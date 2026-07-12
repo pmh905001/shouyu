@@ -86,10 +86,21 @@ class AppState:
     POMODORO_MODE_DEEP = 'deep'
 
     @classmethod
-    def pomodoro_mode(cls) -> str:
-        mode = cls.get('pomodoro_mode', cls.POMODORO_MODE_CLASSIC)
+    def pomodoro_mode(cls, default: Optional[str] = None) -> str:
+        """Return the persisted pomodoro mode.
+
+        `default` lets the caller supply the configured default (from
+        kb.ini) to use when the user has never toggled the mode. Falls back
+        to classic when neither the stored value nor `default` is valid.
+        """
+        fallback = (
+            default
+            if default in (cls.POMODORO_MODE_CLASSIC, cls.POMODORO_MODE_DEEP)
+            else cls.POMODORO_MODE_CLASSIC
+        )
+        mode = cls.get('pomodoro_mode', fallback)
         if mode not in (cls.POMODORO_MODE_CLASSIC, cls.POMODORO_MODE_DEEP):
-            return cls.POMODORO_MODE_CLASSIC
+            return fallback
         return mode
 
     @classmethod

@@ -31,9 +31,11 @@ from shouyu.view.styles import (
 
 _PHASE_LABEL = {
     "idle": ("空闲", SUBTEXT_COLOR_HEX),
+    "planning": ("计划中", ACCENT_COLOR_HEX),
     "working": ("专注中", IN_PROGRESS_COLOR_HEX),
     "short_break": ("短休息", DONE_COLOR_HEX),
     "long_break": ("长休息", DONE_COLOR_HEX),
+    "lunch_break": ("午休", DONE_COLOR_HEX),
     "paused": ("已暂停", SUBTEXT_COLOR_HEX),
 }
 
@@ -323,7 +325,13 @@ class PomodoroWindow(QWidget):
             self.task_label.setText("")
 
     def _update_tip(self, phase: str) -> None:
-        if phase in ("short_break", "long_break"):
+        if phase == "planning":
+            self.tip_label.setText("📝 写下今日最重要的 3 件事，其余往后排")
+            self.tip_label.setVisible(True)
+        elif phase == "lunch_break":
+            self.tip_label.setText("🍚 午餐时间，好好吃饭休息，别工作")
+            self.tip_label.setVisible(True)
+        elif phase in ("short_break", "long_break"):
             self.tip_label.setText(random.choice(_BREAK_TIPS))
             self.tip_label.setVisible(True)
         elif phase == "working":
@@ -334,7 +342,7 @@ class PomodoroWindow(QWidget):
             self.tip_label.setVisible(False)
 
     def _refresh_action_visibility(self, phase: str) -> None:
-        if phase == "working":
+        if phase in ("working", "planning"):
             self.extend_btn.setVisible(True)
             self.extend_btn.setText("+5m")
             self.skip_break_btn.setVisible(False)
@@ -343,6 +351,7 @@ class PomodoroWindow(QWidget):
             self.extend_btn.setText("休息+2m")
             self.skip_break_btn.setVisible(True)
         else:
+            # idle / paused / lunch_break: no extend, and lunch can't be skipped
             self.extend_btn.setVisible(False)
             self.skip_break_btn.setVisible(False)
 

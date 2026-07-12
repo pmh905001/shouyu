@@ -98,7 +98,16 @@ def _start_pomodoro_if_enabled():
         return
     from shouyu.service.pomodoro import PomodoroService
 
-    PomodoroService.instance().start_work()
+    svc = PomodoroService.instance()
+    # The first pomodoro of each day is a short planning session (plan today's
+    # tasks) instead of a normal work block. Guard by date so restarting the
+    # daemon later in the day resumes straight into work.
+    today = AppState.today_str()
+    if Config.pomodoro_planning_enabled() and AppState.get('last_planning_date') != today:
+        AppState.set('last_planning_date', today)
+        svc.start_planning()
+    else:
+        svc.start_work()
 
 
 def _is_daemon_up() -> bool:

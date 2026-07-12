@@ -103,6 +103,64 @@ class Config:
         return int(cls.get('idle_warning_seconds', '300', 'pomodoro'))
 
     @classmethod
+    def pomodoro_default_mode(cls):
+        """Default pomodoro mode used on a fresh launch (before the user has
+        ever toggled the 深度/经典 button): 'deep' (90/15) or 'classic'
+        (25/5). Default: deep."""
+        mode = cls.get('default_mode', 'deep', 'pomodoro').strip().lower()
+        return mode if mode in ('deep', 'classic') else 'deep'
+
+    @classmethod
+    def pomodoro_planning_enabled(cls):
+        """When true, the first pomodoro of the day is a short "plan today's
+        tasks" session instead of a normal work block. Default: true."""
+        return cls.get('planning_enabled', 'true', 'pomodoro').strip().lower() == 'true'
+
+    @classmethod
+    def pomodoro_planning_session_minutes(cls):
+        """Duration (minutes) of the morning planning session. Default: 10."""
+        return int(cls.get('planning_session_minutes', '10', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_planning_break_minutes(cls):
+        """Duration (minutes) of the break that follows the morning planning
+        session. Default: 5."""
+        return int(cls.get('planning_break_minutes', '5', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_lunch_enabled(cls):
+        """When true, no working/planning phase is allowed to run during the
+        configured lunch window; it becomes a "lunch break" instead.
+        Default: true."""
+        return cls.get('lunch_enabled', 'true', 'pomodoro').strip().lower() == 'true'
+
+    @classmethod
+    def pomodoro_lunch_start(cls):
+        """Start of the lunch window as (hour, minute), or None if invalid.
+        Default: 11:30."""
+        return cls._parse_hhmm(cls.get('lunch_start', '11:30', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_lunch_end(cls):
+        """End of the lunch window as (hour, minute), or None if invalid.
+        Default: 13:00."""
+        return cls._parse_hhmm(cls.get('lunch_end', '13:00', 'pomodoro'))
+
+    @staticmethod
+    def _parse_hhmm(value):
+        """Parse an 'HH:MM' string into a (hour, minute) tuple. Returns None
+        when the value is missing or malformed."""
+        try:
+            parts = str(value).strip().split(':')
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            if 0 <= hour < 24 and 0 <= minute < 60:
+                return hour, minute
+        except Exception:
+            pass
+        return None
+
+    @classmethod
     def auto_prompt_duration_for_new_tasks(cls):
         """When you finish typing a brand-new task, pop up the duration picker
         so you commit to a time budget before moving on. Defaults to true."""
