@@ -16,9 +16,13 @@ Events emitted (event_name, payload):
 """
 from __future__ import annotations
 
+import io
 import logging
+import math
+import struct
 import threading
 import time
+import wave
 from enum import Enum
 from typing import Optional
 
@@ -35,20 +39,72 @@ class Phase(str, Enum):
     PAUSED = "paused"
 
 
+_SOFT_TONE_WAV: Optional[bytes] = None
+
+
+def _build_soft_tone_wav() -> bytes:
+    """Generate a short, low-frequency, low-amplitude cue as an in-memory WAV.
+
+    `winsound.Beep` can only set frequency/duration (volume follows the
+    system), and its default 880/660Hz double beep is piercing and carries
+    across a room. This instead builds a soft ~C5 blip at low amplitude with
+    a gentle attack/release envelope so it's noticeable up close but stays
+    unobtrusive to people nearby.
+    """
+    framerate = 44100
+    duration = 0.16
+    freq = 523.25  # C5 — gentler than the old 880Hz
+    amplitude = 0.16  # fraction of full scale; deliberately quiet
+    n = int(framerate * duration)
+    attack = int(framerate * 0.02)
+    release = int(framerate * 0.04)
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(framerate)
+        frames = bytearray()
+        for i in range(n):
+            env = 1.0
+            if i < attack:
+                env = i / attack
+            elif i > n - release:
+                env = max(0.0, (n - i) / release)
+            sample = int(amplitude * env * 32767 * math.sin(2 * math.pi * freq * i / framerate))
+            frames += struct.pack('<h', sample)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+def _soft_tone_wav() -> bytes:
+    global _SOFT_TONE_WAV
+    if _SOFT_TONE_WAV is None:
+        _SOFT_TONE_WAV = _build_soft_tone_wav()
+    return _SOFT_TONE_WAV
+
+
 def _beep_async() -> None:
-    if not Config.pomodoro_notify_sound():
+    # Gate on the environment mode: only the 'home' profile makes sound; the
+    # office/quiet profile stays silent so it never disturbs colleagues.
+    try:
+        if not PomodoroService.instance().sound_allowed():
+            return
+    except Exception:
         return
 
-    def _beep():
+    def _play():
         try:
             import winsound
 
-            winsound.Beep(880, 250)
-            winsound.Beep(660, 250)
+            # NOTE: winsound can't combine SND_MEMORY with SND_ASYNC ("Cannot
+            # play asynchronously from memory"). We're already on a throwaway
+            # daemon thread, so play synchronously — it just blocks this
+            # thread for the tone's ~0.16s.
+            winsound.PlaySound(_soft_tone_wav(), winsound.SND_MEMORY)
         except Exception:
-            logging.exception("failed to beep")
+            logging.exception("failed to play soft cue")
 
-    threading.Thread(target=_beep, daemon=True).start()
+    threading.Thread(target=_play, daemon=True).start()
 
 
 class PomodoroService:
@@ -64,6 +120,10 @@ class PomodoroService:
 
     MODE_CLASSIC = 'classic'
     MODE_DEEP = 'deep'
+
+    ENV_MODE_AUTO = 'auto'
+    ENV_MODE_HOME = 'home'
+    ENV_MODE_OFFICE = 'office'
 
     def __init__(self) -> None:
         self._phase = Phase.IDLE
@@ -208,6 +268,68 @@ class PomodoroService:
         except Exception:
             logging.exception("failed to persist pomodoro mode")
         self._emit("mode_changed", mode)
+
+    # ---------- environment mode (home / office / auto) ----------
+
+    def env_mode(self) -> str:
+        """The current env-mode *setting* the button reflects: auto/home/office.
+        A manual home/office pick decays back to auto the next day."""
+        try:
+            from shouyu.util.state import AppState
+
+            return AppState.env_mode_setting()
+        except Exception:
+            logging.exception("failed to read env mode")
+            return self.ENV_MODE_AUTO
+
+    def set_env_mode(self, mode: str) -> None:
+        if mode not in (self.ENV_MODE_AUTO, self.ENV_MODE_HOME, self.ENV_MODE_OFFICE):
+            mode = self.ENV_MODE_AUTO
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.set_env_mode_setting(mode)
+        except Exception:
+            logging.exception("failed to persist env mode")
+        self._emit("env_mode_changed", mode)
+
+    def resolved_env_mode(self) -> str:
+        """Resolve the setting to the profile actually in effect right now:
+        'home' or 'office'. Manual picks win; 'auto' follows the schedule."""
+        mode = self.env_mode()
+        if mode in (self.ENV_MODE_HOME, self.ENV_MODE_OFFICE):
+            return mode
+        return self._scheduled_env_mode()
+
+    def _scheduled_env_mode(self) -> str:
+        try:
+            days = Config.pomodoro_quiet_days()
+            start = Config.pomodoro_quiet_start()
+            end = Config.pomodoro_quiet_end()
+        except Exception:
+            logging.exception("failed to read quiet schedule")
+            return self.ENV_MODE_HOME
+        if not start or not end or not days:
+            return self.ENV_MODE_HOME
+        now = time.localtime()
+        if now.tm_wday not in days:
+            return self.ENV_MODE_HOME
+        now_minutes = now.tm_hour * 60 + now.tm_min
+        start_minutes = start[0] * 60 + start[1]
+        end_minutes = end[0] * 60 + end[1]
+        if start_minutes <= now_minutes < end_minutes:
+            return self.ENV_MODE_OFFICE
+        return self.ENV_MODE_HOME
+
+    def sound_allowed(self) -> bool:
+        """Whether audible cues are allowed right now: only in the home
+        profile, and only when notify_sound is on."""
+        try:
+            if not Config.pomodoro_notify_sound():
+                return False
+        except Exception:
+            return False
+        return self.resolved_env_mode() == self.ENV_MODE_HOME
 
     def acknowledge_idle(self) -> None:
         """Explicit "我回来了" acknowledgement of the hard idle alarm.

@@ -9,7 +9,7 @@ import random
 from typing import Optional
 
 from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QColor, QMouseEvent, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -104,6 +104,8 @@ class PomodoroWindow(QWidget):
         # True only during the level-2 hard alarm (faster blink + ack button
         # + window forced to front). Level-1 soft blink leaves this False.
         self._alarm_active = False
+        # Full-screen silent popup used for the office/quiet profile alarm.
+        self._overlay: Optional["IdleOverlay"] = None
         # Cached so we can restore exactly what we had after blink ends —
         # the phase may switch while idle (e.g. work → break would also
         # clear the warning), and we want to reflect whatever the latest
@@ -113,6 +115,7 @@ class PomodoroWindow(QWidget):
 
         self._build_ui()
         self._refresh_mode_button()
+        self._refresh_env_button()
         self._move_to_default_corner()
 
     def _build_ui(self) -> None:
@@ -160,6 +163,25 @@ class PomodoroWindow(QWidget):
         )
         self.mode_btn.clicked.connect(self._on_toggle_mode_clicked)
         header_row.addWidget(self.mode_btn)
+
+        self.env_btn = QPushButton("🔄 自动")
+        self.env_btn.setToolTip("切换 自动 / 在家 / 在单位")
+        self.env_btn.setCursor(Qt.PointingHandCursor)
+        self.env_btn.setFixedHeight(20)
+        self.env_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            "  color: #C9C9C9;"
+            "  border: 1px solid rgba(255,255,255,0.16);"
+            "  border-radius: 4px;"
+            "  padding: 1px 8px;"
+            "  font-size: 11px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); color: white; }"
+        )
+        self.env_btn.clicked.connect(self._on_env_btn_clicked)
+        header_row.addWidget(self.env_btn)
         header_row.addStretch(1)
 
         self.cycles_label = QLabel("🍅 0")
@@ -299,6 +321,8 @@ class PomodoroWindow(QWidget):
             pass
         elif event == "mode_changed":
             self._refresh_mode_button()
+        elif event == "env_mode_changed":
+            self._refresh_env_button()
         elif event == "paused":
             self._stop_blink()
             self._set_phase("paused")
@@ -337,6 +361,7 @@ class PomodoroWindow(QWidget):
         if not self._idle_warning_active:
             self.cycles_label.setText(self._current_cycles_text())
         self._refresh_action_visibility(snapshot["phase"])
+        self._refresh_env_button()
 
     def _set_phase(self, phase: str) -> None:
         label, color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
@@ -442,6 +467,41 @@ class PomodoroWindow(QWidget):
             else "当前: 经典 25/5 — 点击切到 深度 90/15"
         )
 
+    def _on_env_btn_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        svc = PomodoroService.instance()
+        order = [
+            PomodoroService.ENV_MODE_AUTO,
+            PomodoroService.ENV_MODE_HOME,
+            PomodoroService.ENV_MODE_OFFICE,
+        ]
+        cur = svc.env_mode()
+        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else order[0]
+        svc.set_env_mode(nxt)
+        self._refresh_env_button()
+
+    def _refresh_env_button(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        svc = PomodoroService.instance()
+        setting = svc.env_mode()
+        resolved = svc.resolved_env_mode()
+        if setting == PomodoroService.ENV_MODE_HOME:
+            self.env_btn.setText("🏠 在家")
+            self.env_btn.setToolTip("在家：柔和提示音 — 点击切到 在单位")
+        elif setting == PomodoroService.ENV_MODE_OFFICE:
+            self.env_btn.setText("🏢 单位")
+            self.env_btn.setToolTip("在单位：静音 + 全屏弹窗 — 点击切回 自动")
+        else:
+            is_office = resolved == PomodoroService.ENV_MODE_OFFICE
+            self.env_btn.setText("🔄 自动·" + ("司" if is_office else "家"))
+            self.env_btn.setToolTip(
+                "自动：按时间表决定，当前 = "
+                + ("在单位(静音弹窗)" if is_office else "在家(有声)")
+                + " — 点击切到 在家"
+            )
+
     # ---------- idle-warning blink ----------
 
     _ALERT_RED = "#FF3B30"
@@ -503,6 +563,14 @@ class PomodoroWindow(QWidget):
         # Force the window back so it can't be ignored from behind other apps.
         self.summon()
 
+        # Office/quiet profile: no sound is played (gated in the service), so
+        # take over the whole screen instead — a silent but un-ignorable
+        # popup that you must dismiss with "我回来了".
+        from shouyu.service.pomodoro import PomodoroService
+
+        if PomodoroService.instance().resolved_env_mode() == PomodoroService.ENV_MODE_OFFICE:
+            self._show_overlay(idle_seconds)
+
     def _stop_blink(self) -> None:
         if not self._idle_warning_active and not self._blink_timer.isActive():
             return
@@ -511,6 +579,7 @@ class PomodoroWindow(QWidget):
         self._idle_warning_active = False
         self._alarm_active = False
         self.ack_btn.setVisible(False)
+        self._hide_overlay()
         # Restore phase label from what _set_phase last cached.
         self.phase_label.setText(self._normal_phase_text)
         self.phase_label.setStyleSheet(
@@ -522,6 +591,16 @@ class PomodoroWindow(QWidget):
         # in sync immediately).
         self._refresh_cycles_label()
         self._apply_card_alert_style(False)
+
+    def _show_overlay(self, idle_seconds: int) -> None:
+        if self._overlay is None:
+            self._overlay = IdleOverlay(on_ack=self._on_ack_clicked)
+        target_screen = self.screen()
+        self._overlay.show_over(idle_seconds, target_screen)
+
+    def _hide_overlay(self) -> None:
+        if self._overlay is not None:
+            self._overlay.hide()
 
     def _on_blink_tick(self) -> None:
         # Toggle the 🍅 emoji visibility — text-level blink instead of
@@ -650,3 +729,78 @@ class PomodoroWindow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._drag_offset = None
         super().mouseReleaseEvent(event)
+
+
+class IdleOverlay(QWidget):
+    """Full-screen, silent, un-ignorable popup for the office/quiet profile.
+
+    When the hard idle alarm fires and sound is suppressed (office mode), we
+    can't rely on a beep, so we cover the whole screen with a translucent red
+    layer that physically blocks whatever you were staring at. The only way
+    out is the big "我回来了" button (or clicking anywhere), which routes to
+    the same acknowledge path as the floating window.
+    """
+
+    def __init__(self, on_ack) -> None:
+        super().__init__()
+        self._on_ack = on_ack
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setWindowFlag(Qt.Tool, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(18)
+
+        title = QLabel("🚨 快回来工作")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #FFFFFF; font-size: 44px; font-weight: 800;")
+        layout.addWidget(title)
+
+        self.sub_label = QLabel("")
+        self.sub_label.setAlignment(Qt.AlignCenter)
+        self.sub_label.setStyleSheet("color: #FFD5D2; font-size: 18px;")
+        layout.addWidget(self.sub_label)
+
+        self.ack_btn = QPushButton("✋ 我回来了")
+        self.ack_btn.setCursor(Qt.PointingHandCursor)
+        self.ack_btn.setFixedSize(220, 56)
+        self.ack_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #FF3B30;"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 12px;"
+            "  font-size: 20px;"
+            "  font-weight: 800;"
+            "}"
+            "QPushButton:hover { background-color: #FF5A50; }"
+        )
+        self.ack_btn.clicked.connect(self._ack)
+        layout.addWidget(self.ack_btn, alignment=Qt.AlignCenter)
+
+    def _ack(self) -> None:
+        if callable(self._on_ack):
+            self._on_ack()
+
+    def show_over(self, idle_seconds: int, screen) -> None:
+        minutes = max(1, int(idle_seconds) // 60)
+        self.sub_label.setText(f"已静止 {minutes} 分钟 · 点“我回来了”继续专注")
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        self.showFullScreen()
+        self.raise_()
+        self.activateWindow()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(40, 0, 0, 205))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        # Clicking anywhere on the overlay also acknowledges — make it as
+        # easy as possible to dismiss once you've actually come back.
+        self._ack()
+        super().mousePressEvent(event)

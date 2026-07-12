@@ -109,6 +109,39 @@ class AppState:
             mode = cls.POMODORO_MODE_CLASSIC
         cls.set('pomodoro_mode', mode)
 
+    # ---------- environment mode (home / office / auto) ----------
+
+    ENV_MODE_AUTO = 'auto'
+    ENV_MODE_HOME = 'home'
+    ENV_MODE_OFFICE = 'office'
+
+    @classmethod
+    def env_mode_setting(cls) -> str:
+        """Return the current env-mode *setting* (auto / home / office).
+
+        A manual home/office pick only counts for the day it was made — the
+        morning after, it decays back to 'auto' so the schedule takes over
+        again and you don't get stuck in yesterday's environment.
+        """
+        mode = cls.get('env_mode_override', cls.ENV_MODE_AUTO)
+        if mode not in (cls.ENV_MODE_HOME, cls.ENV_MODE_OFFICE):
+            return cls.ENV_MODE_AUTO
+        if cls.get('env_mode_override_date') != cls.today_str():
+            return cls.ENV_MODE_AUTO
+        return mode
+
+    @classmethod
+    def set_env_mode_setting(cls, mode: str) -> None:
+        with cls._lock:
+            data = cls._load()
+            if mode in (cls.ENV_MODE_HOME, cls.ENV_MODE_OFFICE):
+                data['env_mode_override'] = mode
+                data['env_mode_override_date'] = cls.today_str()
+            else:
+                data.pop('env_mode_override', None)
+                data.pop('env_mode_override_date', None)
+            cls._save()
+
     @classmethod
     def increment_today_counter(cls, key: str) -> int:
         """Bump a date-scoped counter. Stored as `<key>:YYYY-MM-DD`."""

@@ -118,6 +118,52 @@ class Config:
         short break. Set to 0 to disable the forced break. Default: 3."""
         return int(cls.get('idle_drifts_before_break', '3', 'pomodoro'))
 
+    _WEEKDAY_MAP = {
+        'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6,
+    }
+
+    @classmethod
+    def pomodoro_quiet_days(cls):
+        """Weekdays (as a set of ints, Mon=0..Sun=6) on which the 'auto'
+        environment mode defaults to the quiet/office profile during the
+        quiet window. Accepts mon..sun, numbers 0-6, or the shorthands
+        weekday/weekend/all. Default: Mon-Fri."""
+        return cls._parse_weekdays(cls.get('quiet_days', 'mon,tue,wed,thu,fri', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_quiet_start(cls):
+        """Start of the daily quiet window as (hour, minute). Default 09:00."""
+        return cls._parse_hhmm(cls.get('quiet_start', '09:00', 'pomodoro'))
+
+    @classmethod
+    def pomodoro_quiet_end(cls):
+        """End of the daily quiet window as (hour, minute). Default 18:00."""
+        return cls._parse_hhmm(cls.get('quiet_end', '18:00', 'pomodoro'))
+
+    @classmethod
+    def _parse_weekdays(cls, value):
+        result = set()
+        for token in str(value).split(','):
+            t = token.strip().lower()
+            if not t:
+                continue
+            if t in ('weekday', 'weekdays'):
+                result.update({0, 1, 2, 3, 4})
+            elif t in ('weekend', 'weekends'):
+                result.update({5, 6})
+            elif t in ('all', 'everyday', 'daily'):
+                result.update({0, 1, 2, 3, 4, 5, 6})
+            elif t in cls._WEEKDAY_MAP:
+                result.add(cls._WEEKDAY_MAP[t])
+            else:
+                try:
+                    n = int(t)
+                    if 0 <= n <= 6:
+                        result.add(n)
+                except ValueError:
+                    pass
+        return result
+
     @classmethod
     def pomodoro_default_mode(cls):
         """Default pomodoro mode used on a fresh launch (before the user has

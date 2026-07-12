@@ -969,8 +969,8 @@ class HabitDialog(QDialog):
 
     def _on_editor_closed(self, _editor, hint) -> None:
         """Excel-like: after the user commits an inline edit, jump editing to
-        the next row. If we're already on the last row and it has content,
-        auto-extend with a new empty row."""
+        the next row. On the last row we stop (no auto-added blank row) — use
+        Ctrl+ + to add another task."""
         if hint == QAbstractItemDelegate.EndEditHint.RevertModelCache:
             # User pressed Esc. Don't advance.
             return
@@ -1016,22 +1016,9 @@ class HabitDialog(QDialog):
         if next_row < self.list_widget.count():
             self.list_widget.setCurrentRow(next_row)
             self._edit_row(next_row)
-        elif (
-            0 <= index < len(self._tasks)
-            and (self._tasks[index].text or "").strip()
-        ):
-            # Auto-extending the list with a new blank row is a mutation —
-            # make it undoable so Ctrl+Z removes the empty placeholder
-            # without the user having to manually delete it.
-            self._push_undo()
-            new_task = PlanTask(text="", status=TaskStatus.PENDING)
-            self._pending_duration_prompt.add(id(new_task))
-            self._tasks.append(new_task)
-            new_row = len(self._tasks) - 1
-            self._render_tasks()
-            self.list_widget.setCurrentRow(new_row)
-            self._update_stats()
-            self._edit_row(new_row)
+        # On the last row we deliberately do NOT auto-append a new blank row:
+        # committing the final task just ends editing. Use Ctrl+ + (or the
+        # right-click menu) to add another task.
 
     def _edit_selected(self) -> None:
         self._edit_row(self.list_widget.currentRow())
