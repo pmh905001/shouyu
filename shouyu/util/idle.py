@@ -55,6 +55,12 @@ def _lazy_init() -> bool:
         _user32.GetLastInputInfo.argtypes = [ctypes.POINTER(_LASTINPUTINFO)]
         _user32.GetLastInputInfo.restype = wintypes.BOOL
         _kernel32.GetTickCount.restype = wintypes.DWORD
+        # Used by is_workstation_locked(). HDESK is a handle (pointer-sized),
+        # so pin the return/arg types to avoid truncation on 64-bit.
+        _user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        _user32.OpenInputDesktop.restype = wintypes.HDESK
+        _user32.CloseDesktop.argtypes = [wintypes.HDESK]
+        _user32.CloseDesktop.restype = wintypes.BOOL
         return True
     except Exception:
         logging.exception("idle: failed to initialize Windows API bindings")
@@ -85,3 +91,35 @@ def seconds_since_last_input() -> float:
     tick_now = _kernel32.GetTickCount()
     delta_ms = (tick_now - info.dwTime) & 0xFFFFFFFF
     return delta_ms / 1000.0
+
+
+def is_workstation_locked() -> bool:
+    """Return True if the workstation is currently locked (or otherwise on the
+    secure Winlogon desktop, e.g. UAC prompt / lock screen / secure screensaver).
+
+    Implementation: try to open the *input* desktop. When the session is
+    locked, the interactive input desktop switches to the secure desktop and a
+    normal-privilege process can no longer open it, so OpenInputDesktop returns
+    NULL. We treat that NULL as "locked".
+
+    Returns False on non-Windows platforms or if the API call fails — i.e. we
+    default to "unlocked / allowed to make sound", so a detection failure can
+    never leave the pomodoro permanently silent.
+    """
+    if not _lazy_init():
+        return False
+    # DESKTOP_SWITCHDESKTOP — cheapest access right that still forces the
+    # "can I actually reach the input desktop?" check we care about.
+    DESKTOP_SWITCHDESKTOP = 0x0100
+    try:
+        handle = _user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+    except Exception:
+        logging.exception("idle: OpenInputDesktop call failed")
+        return False
+    if not handle:
+        return True
+    try:
+        _user32.CloseDesktop(handle)
+    except Exception:
+        logging.exception("idle: CloseDesktop call failed")
+    return False

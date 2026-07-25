@@ -323,13 +323,28 @@ class PomodoroService:
 
     def sound_allowed(self) -> bool:
         """Whether audible cues are allowed right now: only in the home
-        profile, and only when notify_sound is on."""
+        profile, only when notify_sound is on, and not while the workstation
+        is locked (you've stepped away — nobody's there to hear it)."""
         try:
             if not Config.pomodoro_notify_sound():
+                return False
+            if Config.pomodoro_silence_when_locked() and self._is_locked():
                 return False
         except Exception:
             return False
         return self.resolved_env_mode() == self.ENV_MODE_HOME
+
+    @staticmethod
+    def _is_locked() -> bool:
+        """Best-effort workstation-lock check. Never raises: on any failure it
+        reports 'unlocked' so a detection glitch can't permanently mute cues."""
+        try:
+            from shouyu.util.idle import is_workstation_locked
+
+            return is_workstation_locked()
+        except Exception:
+            logging.exception("failed to query workstation lock state")
+            return False
 
     def acknowledge_idle(self) -> None:
         """Explicit "我回来了" acknowledgement of the hard idle alarm.
@@ -623,6 +638,19 @@ class PomodoroService:
 
             # Feature disabled, or not in a working phase -> clear and idle.
             if warn_t <= 0 or phase != Phase.WORKING:
+                self._clear_idle_state()
+                continue
+
+            # Workstation locked -> you deliberately stepped away; that's not
+            # "drifting". Clear any active warning/alarm and skip escalation so
+            # we neither beep nor count a focus-drift while you're gone. (Sound
+            # is separately gated in sound_allowed(), but bailing here also
+            # stops the silent state machine from escalating.)
+            try:
+                skip_when_locked = Config.pomodoro_silence_when_locked()
+            except Exception:
+                skip_when_locked = True
+            if skip_when_locked and self._is_locked():
                 self._clear_idle_state()
                 continue
 

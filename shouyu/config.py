@@ -83,6 +83,16 @@ class Config:
         return cls.get('notify_sound', 'true', 'pomodoro').strip().lower() == 'true'
 
     @classmethod
+    def pomodoro_silence_when_locked(cls):
+        """When true, suppress all pomodoro cues (transition beeps AND the
+        hard idle alarm) while the workstation is locked — you've stepped away
+        so nobody's there to hear it, and it avoids beeping on a shared/office
+        machine after you lock and leave. Also stops the idle-drift alarm from
+        escalating while locked (a deliberate lock isn't "drifting"). Default:
+        true."""
+        return cls.get('silence_when_locked', 'true', 'pomodoro').strip().lower() == 'true'
+
+    @classmethod
     def pomodoro_deep_work_minutes(cls):
         """Work duration when running in 'deep' mode (default 90)."""
         return int(cls.get('deep_work_minutes', '90', 'pomodoro'))
