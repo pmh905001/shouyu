@@ -339,6 +339,10 @@ class PomodoroWindow(QWidget):
         elif event == "extended":
             # phase unchanged; remaining seconds will refresh on next tick
             pass
+        elif event == "task_changed":
+            # Task re-attributed elsewhere (switched focus / completed a task).
+            # Only the label changes — the timer keeps running untouched.
+            self._set_task(payload)
         elif event == "mode_changed":
             self._refresh_mode_button()
         elif event == "env_mode_changed":

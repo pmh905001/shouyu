@@ -187,10 +187,34 @@ class PomodoroService:
     def start_work(self, task_text: Optional[str] = None) -> None:
         if not Config.pomodoro_enabled():
             return
+        with self._state_lock:
+            already_working = self._phase == Phase.WORKING
+        if already_working:
+            # A working pomodoro is already running — switching to another task
+            # should NOT throw away the current block. Just re-attribute the
+            # running pomodoro to the new task (keep remaining time / start).
+            self.set_current_task(task_text)
+            return
         if task_text:
             with self._state_lock:
                 self._task_text_override = task_text
         self._begin_phase(Phase.WORKING)
+
+    def set_current_task(self, task_text: Optional[str]) -> None:
+        """Update which task the current phase is attributed to WITHOUT touching
+        the timer (no reset). Pass an explicit string (``""`` clears the label);
+        pass ``None`` to re-read the in-progress task from the daily sheet.
+        Emits a ``task_changed`` event so the floating window refreshes its
+        task label in place."""
+        with self._state_lock:
+            if task_text is not None:
+                self._current_task_text = task_text
+                self._task_text_override = None
+            else:
+                self._task_text_override = None
+                self._refresh_current_task_text_locked()
+            text = self._current_task_text
+        self._emit("task_changed", text)
 
     def start_planning(self, task_text: Optional[str] = None) -> None:
         """Start the morning planning session: a short block to lay out the

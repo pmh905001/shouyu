@@ -1448,6 +1448,7 @@ class HabitDialog(QDialog):
         self._render_tasks()
         self.list_widget.setCurrentRow(index)
         self._update_stats()
+        self._sync_pomodoro_task()
         if new_status == TaskStatus.DONE:
             # Prompt is intentionally non-blocking-feeling: cancelling just
             # skips the reflection, the DONE state is already committed.
@@ -1698,6 +1699,22 @@ class HabitDialog(QDialog):
                 logging.exception("failed to start pomodoro for selected task")
 
         QTimer.singleShot(50, _kick)
+
+    def _sync_pomodoro_task(self) -> None:
+        """Keep the floating pomodoro window's task label in sync with whichever
+        task is currently in progress (e.g. after completing / switching a
+        task). Only touches the label — never the running timer."""
+        try:
+            from shouyu.service.pomodoro import PomodoroService
+
+            in_progress = next(
+                (t for t in self._tasks if t.status == TaskStatus.IN_PROGRESS), None
+            )
+            PomodoroService.instance().set_current_task(
+                in_progress.text if in_progress is not None else ""
+            )
+        except Exception:
+            logging.exception("failed to sync pomodoro task label")
 
     # ---------- drag & drop between the three lists ----------
 

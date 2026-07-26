@@ -49,6 +49,7 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-07-26
 
+- **番茄进行中切换任务不再重开计时**：专注中再点另一条任务的「专注」，只把当前番茄「换名」继续（保留剩余时间与起始点），不再从满时长重开；同时完成 / 切换「进行中」任务时，番茄窗口的「→ 任务名」会实时同步（无进行中任务则清空），消除陈旧显示。新增服务方法 `set_current_task` 与 `task_changed` 事件。（`shouyu/service/pomodoro.py`、`shouyu/view/pomodoro_window.py`、`shouyu/view/habit_dialog.py`）
 - **番茄钟「去休息」提前结束**：专注阶段新增「去休息」按钮，任务提前做完时可立即结束当前番茄并进入休息（按番茄数决定短休/长休）。提前结束仍计一个 🍅，并按**实际专注时长**记录到 Excel；晨间规划阶段点它则进入规划休息、不计 🍅。（`shouyu/service/pomodoro.py`、`shouyu/view/pomodoro_window.py`）
 - **番茄钟休息提醒卡片**：休息开始时在屏幕居中弹出醒目大卡片（大号倒计时 + 开始休息 / 延长 / 跳过 按钮），避免埋头工作错过休息。可通过 `kb.ini` 的 `break_reminder` 开关控制。（`shouyu/view/pomodoro_window.py`、`shouyu/config.py`）
 - **番茄钟锁屏静音**：Windows 下通过 `OpenInputDesktop` 检测锁屏；锁屏期间静音提示音并跳过「走神」告警升级，避免锁屏后仍被打扰。可通过 `kb.ini` 的 `silence_when_locked` 开关控制。（`shouyu/util/idle.py`、`shouyu/service/pomodoro.py`）
