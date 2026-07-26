@@ -377,6 +377,44 @@ class PomodoroService:
         self._begin_phase(Phase.WORKING)
         return True
 
+    def finish_early(self) -> bool:
+        """Finish the current focus phase *now* and go straight to the break,
+        as if the timer had just run out. For when you complete the task ahead
+        of time and want to rest instead of waiting the clock out.
+
+        A working phase ended this way still counts as a completed pomodoro
+        (logged with the ACTUAL elapsed minutes). A planning phase flows into
+        the planning break. No-op outside a focus phase.
+        """
+        with self._state_lock:
+            phase = self._phase
+        if phase == Phase.PLANNING:
+            self._begin_phase(
+                Phase.SHORT_BREAK,
+                duration_override=Config.pomodoro_planning_break_minutes() * 60,
+            )
+            return True
+        if phase != Phase.WORKING:
+            return False
+        # Mirror the natural-completion path (_on_phase_finished WORKING branch)
+        # but log the real elapsed time rather than the configured duration.
+        self._record_pomodoro_completion(actual_minutes=self._elapsed_working_minutes())
+        with self._state_lock:
+            self._completed_today += 1
+            completed = self._completed_today
+        cycles_long = Config.pomodoro_cycles_before_long_break()
+        if cycles_long > 0 and completed % cycles_long == 0:
+            self._begin_phase(Phase.LONG_BREAK)
+        else:
+            self._begin_phase(Phase.SHORT_BREAK)
+        return True
+
+    def _elapsed_working_minutes(self) -> int:
+        started = self._current_task_started_at
+        if not started:
+            return 0
+        return max(1, int(round((time.time() - started) / 60)))
+
     def snapshot(self) -> dict:
         with self._state_lock:
             now = time.time()
@@ -532,7 +570,7 @@ class PomodoroService:
             # short_break / long_break / lunch_break -> back to work
             self._begin_phase(Phase.WORKING)
 
-    def _record_pomodoro_completion(self) -> None:
+    def _record_pomodoro_completion(self, actual_minutes: Optional[int] = None) -> None:
         from shouyu.service.excel import KbExcel
 
         try:
@@ -543,8 +581,11 @@ class PomodoroService:
                 else Config.pomodoro_work_minutes()
             )
             started_at = self._current_task_started_at or (now - duration_min * 60)
+            # For an early finish we log the real elapsed minutes; a natural
+            # completion logs the configured duration.
+            logged_min = actual_minutes if actual_minutes is not None else duration_min
             label = (
-                f"🍅 {duration_min}min @"
+                f"🍅 {logged_min}min @"
                 f"{time.strftime('%H:%M', time.localtime(started_at))}-"
                 f"{time.strftime('%H:%M', time.localtime(now))}"
             )

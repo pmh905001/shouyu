@@ -93,6 +93,18 @@ class Config:
         return cls.get('silence_when_locked', 'true', 'pomodoro').strip().lower() == 'true'
 
     @classmethod
+    def pomodoro_break_reminder(cls):
+        """How to announce the START of a break so you don't work straight
+        through it:
+          center = pop a centered "该休息了" card AND bring the timer window to
+                   the front (calm, hard to miss, one-click to skip)
+          off    = just quietly show the small floating window in the corner
+                   (the old behavior)
+        Default: center."""
+        value = cls.get('break_reminder', 'center', 'pomodoro').strip().lower()
+        return value if value in ('center', 'off') else 'center'
+
+    @classmethod
     def pomodoro_deep_work_minutes(cls):
         """Work duration when running in 'deep' mode (default 90)."""
         return int(cls.get('deep_work_minutes', '90', 'pomodoro'))

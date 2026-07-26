@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
@@ -63,6 +64,23 @@ class TaskPriority(str, Enum):
         return cls.NONE
 
 
+class TaskCategory(str, Enum):
+    """Which life-area a task belongs to. Drives the two parallel Backlog
+    sections and which backlog sheet a task is persisted to."""
+
+    WORK = "work"
+    LIFE = "life"
+
+    @classmethod
+    def from_value(cls, raw) -> "TaskCategory":
+        if raw is None:
+            return cls.WORK
+        text = str(raw).strip().lower()
+        if text == cls.LIFE.value:
+            return cls.LIFE
+        return cls.WORK
+
+
 # openpyxl exposes colors as ARGB hex strings ("00RRGGBB") in most cases.
 PENDING_COLOR = "FF808080"
 IN_PROGRESS_COLOR = "FFC00000"
@@ -74,7 +92,23 @@ PLAN_TASK_COLUMN = "B"
 PLAN_DURATION_COLUMN = "C"
 PLAN_PRIORITY_COLUMN = "D"
 PLAN_REFLECTION_COLUMN = "E"
+PLAN_CATEGORY_COLUMN = "F"
 PLAN_FIRST_TASK_ROW = 2
+
+# ---------- Backlog (cross-day task pool) ----------
+# Work / life are kept in two separate sheets so the workbook stays readable
+# when opened directly in Excel; the category is therefore implicit in which
+# sheet a row lives in (no category column needed inside the backlog sheets).
+BACKLOG_SHEET_WORK = "backlog-work"
+BACKLOG_SHEET_LIFE = "backlog-life"
+BACKLOG_HEADER_CELL = "A1"
+BACKLOG_HEADER_TEXT = "backlog"
+BACKLOG_TASK_COLUMN = "A"
+BACKLOG_DURATION_COLUMN = "B"
+BACKLOG_PRIORITY_COLUMN = "C"
+BACKLOG_REFLECTION_COLUMN = "D"
+BACKLOG_CREATED_COLUMN = "E"
+BACKLOG_FIRST_TASK_ROW = 2
 
 # Reflection text color: deliberately the same hex as IN_PROGRESS so the
 # reflection cells visually stand out from the plain task text in Excel.
@@ -129,6 +163,13 @@ class PlanTask:
     # task DONE. Persisted in the plan-area E column with a red font so it
     # stands out from the task text itself.
     reflection: str = ""
+    # Work / life bucket. Drives the Backlog section a task belongs to and
+    # which backlog sheet it is written to. Defaults to WORK so legacy rows
+    # (no category column) read back as work.
+    category: TaskCategory = TaskCategory.WORK
+    # Date (YYYY-MM-DD) the task entered the Backlog pool. Only meaningful for
+    # backlog tasks; today's plan tasks leave it empty. Used to show "已搁置 N 天".
+    created_date: str = ""
 
     def display_text(self) -> str:
         return self.text or ""
@@ -190,6 +231,9 @@ class PlanService:
             )
             reflection_value = self.ws[f"{PLAN_REFLECTION_COLUMN}{row}"].value
             reflection = str(reflection_value) if reflection_value is not None else ""
+            category = TaskCategory.from_value(
+                self.ws[f"{PLAN_CATEGORY_COLUMN}{row}"].value
+            )
             tasks.append(
                 PlanTask(
                     text=str(value),
@@ -198,6 +242,7 @@ class PlanService:
                     duration_minutes=duration,
                     priority=priority,
                     reflection=reflection,
+                    category=category,
                 )
             )
             row += 1
@@ -227,6 +272,8 @@ class PlanService:
                 reflection_cell.font = Font(color=REFLECTION_COLOR, bold=True)
             else:
                 reflection_cell.font = Font()
+            category_cell = self.ws[f"{PLAN_CATEGORY_COLUMN}{row}"]
+            category_cell.value = task.category.value if task.category else None
             task.row = row
 
         for row in range(PLAN_FIRST_TASK_ROW + len(tasks), max_row_to_clear + 1):
@@ -235,6 +282,7 @@ class PlanService:
                 PLAN_DURATION_COLUMN,
                 PLAN_PRIORITY_COLUMN,
                 PLAN_REFLECTION_COLUMN,
+                PLAN_CATEGORY_COLUMN,
             ):
                 cell = self.ws[f"{column}{row}"]
                 cell.value = None
@@ -370,3 +418,126 @@ class PlanService:
                     count += 1
                     break
         return count
+
+
+def _created_date_to_str(value) -> str:
+    """Normalize whatever openpyxl hands back for the created-date cell into a
+    'YYYY-MM-DD' string (or '' if empty)."""
+    if value is None:
+        return ""
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+    return str(value).strip()
+
+
+class BacklogService:
+    """Read / write one Backlog sheet (work or life).
+
+    Layout (mirrors the plan area but without a status column — pooled tasks
+    are always pending):
+
+        Row 1   A: "backlog"
+        Row 2+  A: text  B: duration  C: priority  D: reflection  E: created_date
+
+    Row order == display order, so reordering in the UI is persisted by a full
+    rewrite (same "write then clear the tail" strategy as write_plan_tasks).
+    """
+
+    def __init__(self, worksheet: Worksheet, category: TaskCategory):
+        self.ws = worksheet
+        self.category = category
+
+    def ensure_header(self) -> None:
+        cell = self.ws[BACKLOG_HEADER_CELL]
+        if cell.value != BACKLOG_HEADER_TEXT:
+            cell.value = BACKLOG_HEADER_TEXT
+
+    def read(self) -> List[PlanTask]:
+        tasks: List[PlanTask] = []
+        row = BACKLOG_FIRST_TASK_ROW
+        while True:
+            cell = self.ws[f"{BACKLOG_TASK_COLUMN}{row}"]
+            value = cell.value
+            if value is None or str(value).strip() == "":
+                break
+            duration_value = self.ws[f"{BACKLOG_DURATION_COLUMN}{row}"].value
+            duration = 0
+            if isinstance(duration_value, (int, float)):
+                duration = int(duration_value)
+            elif isinstance(duration_value, str):
+                stripped = duration_value.strip().rstrip("m")
+                if stripped.isdigit():
+                    duration = int(stripped)
+            priority = TaskPriority.from_value(
+                self.ws[f"{BACKLOG_PRIORITY_COLUMN}{row}"].value
+            )
+            reflection_value = self.ws[f"{BACKLOG_REFLECTION_COLUMN}{row}"].value
+            reflection = str(reflection_value) if reflection_value is not None else ""
+            created = _created_date_to_str(
+                self.ws[f"{BACKLOG_CREATED_COLUMN}{row}"].value
+            )
+            tasks.append(
+                PlanTask(
+                    text=str(value),
+                    status=TaskStatus.PENDING,
+                    row=row,
+                    duration_minutes=duration,
+                    priority=priority,
+                    reflection=reflection,
+                    category=self.category,
+                    created_date=created,
+                )
+            )
+            row += 1
+        return tasks
+
+    def write(self, tasks: List[PlanTask]) -> None:
+        """Persist the pool into the sheet, clearing any orphan rows below."""
+        self.ensure_header()
+        existing = self.read()
+        max_row_to_clear = max(
+            [t.row for t in existing]
+            + [BACKLOG_FIRST_TASK_ROW + len(tasks) - 1, BACKLOG_FIRST_TASK_ROW]
+        )
+        today = time.strftime("%Y-%m-%d")
+
+        for i, task in enumerate(tasks):
+            row = BACKLOG_FIRST_TASK_ROW + i
+            text_cell = self.ws[f"{BACKLOG_TASK_COLUMN}{row}"]
+            text_cell.value = task.text
+            text_cell.font = _font_for(TaskStatus.PENDING)
+            duration_cell = self.ws[f"{BACKLOG_DURATION_COLUMN}{row}"]
+            duration_cell.value = task.duration_minutes if task.duration_minutes > 0 else None
+            priority_cell = self.ws[f"{BACKLOG_PRIORITY_COLUMN}{row}"]
+            priority_cell.value = (
+                task.priority.value if task.priority != TaskPriority.NONE else None
+            )
+            reflection_cell = self.ws[f"{BACKLOG_REFLECTION_COLUMN}{row}"]
+            reflection_text = (task.reflection or "").strip()
+            reflection_cell.value = reflection_text or None
+            if reflection_text:
+                reflection_cell.font = Font(color=REFLECTION_COLOR, bold=True)
+            else:
+                reflection_cell.font = Font()
+            created_cell = self.ws[f"{BACKLOG_CREATED_COLUMN}{row}"]
+            created = (task.created_date or "").strip() or today
+            created_cell.value = created
+            # Keep the in-memory task in sync so callers see the stamped date/row.
+            task.created_date = created
+            task.category = self.category
+            task.row = row
+
+        for row in range(BACKLOG_FIRST_TASK_ROW + len(tasks), max_row_to_clear + 1):
+            for column in (
+                BACKLOG_TASK_COLUMN,
+                BACKLOG_DURATION_COLUMN,
+                BACKLOG_PRIORITY_COLUMN,
+                BACKLOG_REFLECTION_COLUMN,
+                BACKLOG_CREATED_COLUMN,
+            ):
+                cell = self.ws[f"{column}{row}"]
+                cell.value = None
+                cell.font = Font()

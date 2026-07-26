@@ -19,7 +19,15 @@ from openpyxl.worksheet.worksheet import Worksheet
 from shouyu.config import Config
 from shouyu.decorator.servicehandler import service_handler
 from shouyu.service.context import ExcelContext
-from shouyu.service.plan import PlanService
+from shouyu.service.plan import (
+    BACKLOG_HEADER_CELL,
+    BACKLOG_HEADER_TEXT,
+    BACKLOG_SHEET_LIFE,
+    BACKLOG_SHEET_WORK,
+    BacklogService,
+    PlanService,
+    TaskCategory,
+)
 from shouyu.util.process import ProcessManager
 
 
@@ -473,6 +481,18 @@ class KbExcel:
         if not date_str or date_str not in self._workbook.sheetnames:
             return None
         return PlanService(self._workbook[date_str])
+
+    def backlog_service(self, category: TaskCategory) -> BacklogService:
+        """Return a BacklogService bound to the work/life backlog sheet,
+        lazily creating (and seeding the header of) the sheet on first use."""
+        name = BACKLOG_SHEET_WORK if category == TaskCategory.WORK else BACKLOG_SHEET_LIFE
+        if name in self._workbook.sheetnames:
+            worksheet = self._workbook[name]
+        else:
+            worksheet = self._workbook.create_sheet(name)
+            worksheet[BACKLOG_HEADER_CELL] = BACKLOG_HEADER_TEXT
+            self._changed = True
+        return BacklogService(worksheet, category)
 
     def stage_reflection(self, text: str, date_str: str = None) -> None:
         """Write the reflection into the in-memory workbook only — does NOT

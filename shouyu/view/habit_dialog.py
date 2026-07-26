@@ -25,8 +25,8 @@ import threading
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer
+from PySide6.QtGui import QColor, QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
@@ -55,6 +55,7 @@ from shouyu.config import Config
 from shouyu.service.plan import (
     DEFAULT_PLAN_TASKS,
     PlanTask,
+    TaskCategory,
     TaskPriority,
     TaskStatus,
 )
@@ -88,12 +89,33 @@ _PRIORITY_BADGE = {
     TaskPriority.P3: "⚪ P3",
 }
 
+_CATEGORY_BADGE = {
+    TaskCategory.WORK: "🏢",
+    TaskCategory.LIFE: "🏠",
+}
+
 _TASK_ROLE = Qt.UserRole + 1
+
+
+def _days_since(created_date: str) -> int:
+    """Whole days elapsed since `created_date` (YYYY-MM-DD). 0 on parse error."""
+    if not created_date:
+        return 0
+    try:
+        created = time.strptime(created_date.strip(), "%Y-%m-%d")
+        created_days = time.mktime(created) // 86400
+        today_days = time.mktime(time.localtime()) // 86400
+        return max(0, int(today_days - created_days))
+    except Exception:
+        return 0
 
 
 def _format(task: PlanTask) -> str:
     glyph = _GLYPH.get(task.status, "○")
     parts = [glyph, " ", task.text or ""]
+    cat_badge = _CATEGORY_BADGE.get(task.category)
+    if cat_badge:
+        parts.append(f"   {cat_badge}")
     badge = _PRIORITY_BADGE.get(task.priority)
     if badge:
         parts.append(f"   {badge}")
@@ -104,6 +126,81 @@ def _format(task: PlanTask) -> str:
     if (task.reflection or "").strip():
         parts.append("   📝")
     return "".join(parts)
+
+
+def _format_backlog(task: PlanTask) -> str:
+    """Backlog rows always render as pending (the pool has no status), and add
+    a "已搁置 N 天" badge instead of the 🎯/category decorations. Category is
+    implicit in which section the row lives in, so no 🏢/🏠 badge here."""
+    parts = ["○ ", task.text or ""]
+    badge = _PRIORITY_BADGE.get(task.priority)
+    if badge:
+        parts.append(f"   {badge}")
+    if task.duration_minutes:
+        parts.append(f"   ⏱ {task.duration_minutes}m")
+    days = _days_since(task.created_date)
+    if days >= 2:
+        parts.append(f"   ⏳ {days}d")
+    if (task.reflection or "").strip():
+        parts.append("   📝")
+    return "".join(parts)
+
+
+class _DragDropList(QListWidget):
+    """QListWidget that supports dragging items *between* three sibling lists
+    (today / work-backlog / life-backlog) as well as internal reordering.
+
+    QListWidget's default InternalMove can't move the PlanTask payload across
+    widgets (item roles aren't serialized into the drag MIME). So instead we
+    run our own QDrag and let the dialog reconcile the in-memory task lists on
+    drop — the whole thing is driven by `dialog._begin_drag` / `_handle_drop`
+    which mutate the backing lists and re-render. We deliberately do NOT call
+    super().dropEvent / rely on the model, so Qt never removes/inserts rows
+    behind our back.
+    """
+
+    def __init__(self, dialog: "HabitDialog") -> None:
+        super().__init__()
+        self._dialog = dialog
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802 (Qt override)
+        item = self.currentItem()
+        if item is None:
+            return
+        self._dialog._begin_drag(self, item)
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(item.text())
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        target_row = self._drop_row(event)
+        event.acceptProposedAction()
+        # Defer so the source list's startDrag/exec loop fully unwinds before
+        # we clear & rebuild the widgets (mutating during the drag can crash).
+        dialog = self._dialog
+        QTimer.singleShot(0, lambda: dialog._handle_drop(self, target_row))
+
+    def _drop_row(self, event) -> int:
+        try:
+            pos = event.position().toPoint()
+        except Exception:
+            pos = event.pos()
+        item = self.itemAt(pos)
+        if item is None:
+            return self.count()
+        row = self.row(item)
+        rect = self.visualItemRect(item)
+        if pos.y() > rect.center().y():
+            row += 1
+        return row
 
 
 def _apply_item_style(item: QListWidgetItem, status: TaskStatus) -> None:
@@ -158,6 +255,8 @@ def _persist_plan_in_background(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
     yesterday_done_rows: Optional[List[int]] = None,
+    work_snapshot: Optional[List[PlanTask]] = None,
+    life_snapshot: Optional[List[PlanTask]] = None,
 ) -> None:
     """Run the openpyxl backup+save on a worker thread; the UI returns instantly.
 
@@ -191,6 +290,15 @@ def _persist_plan_in_background(
                 for row in yesterday_done_rows:
                     if row:
                         yesterday_plan.mark_plan_done(row)
+        # Backlog pools: full rewrite of each sheet from the in-memory copy.
+        if work_snapshot is not None:
+            excel.backlog_service(TaskCategory.WORK).write(
+                [t for t in work_snapshot if (t.text or "").strip()]
+            )
+        if life_snapshot is not None:
+            excel.backlog_service(TaskCategory.LIFE).write(
+                [t for t in life_snapshot if (t.text or "").strip()]
+            )
         excel.mark_changed()
 
     def _notify_retry_started(reason: str) -> None:
@@ -309,6 +417,7 @@ def _read_yesterday_snapshot() -> dict:
                 duration_minutes=t.duration_minutes,
                 priority=t.priority,
                 reflection=t.reflection,
+                category=t.category,
             )
             for t in tasks
             if t.status != TaskStatus.DONE
@@ -341,6 +450,16 @@ class HabitDialog(QDialog):
 
         self._habits: List[str] = []
         self._tasks: List[PlanTask] = []
+        # Cross-day Backlog pools (work / life), each backed by its own sheet.
+        self._work_tasks: List[PlanTask] = []
+        self._life_tasks: List[PlanTask] = []
+        # Snapshot of the backlog right after the last load, for unsaved-change
+        # detection (parallel to _initial_tasks_snapshot).
+        self._initial_backlog_snapshot: tuple = ((), ())
+        # Transient drag state shared across the three lists (see _DragDropList).
+        self._drag_source: Optional[QListWidget] = None
+        self._drag_row: int = -1
+        self._drag_payload: Optional[PlanTask] = None
         self._original_in_progress: Optional[str] = None
         self._closing = False
         # Snapshot of the plan state right after the last load from Excel.
@@ -395,6 +514,7 @@ class HabitDialog(QDialog):
     def refresh_plan_from_excel(self) -> None:
         from shouyu.service.excel import KbExcel
 
+        excel = None
         try:
             excel = KbExcel()
             tasks = excel.plan_service().read_plan_tasks()
@@ -409,8 +529,25 @@ class HabitDialog(QDialog):
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
 
+        # Backlog pools (cross-day). Read on every open so the two sections
+        # reflect the on-disk pool; the in-memory copy is the working set until
+        # the next save (same open-time-snapshot model as the plan area).
+        try:
+            if excel is None:
+                excel = KbExcel()
+            self._work_tasks = excel.backlog_service(TaskCategory.WORK).read()
+            self._life_tasks = excel.backlog_service(TaskCategory.LIFE).read()
+        except Exception:
+            logging.exception("failed to read backlog from Excel")
+            self._work_tasks = []
+            self._life_tasks = []
+
         # Capture the just-loaded state so we can detect unsaved edits later.
         self._initial_tasks_snapshot = self._snapshot_tasks(self._tasks)
+        self._initial_backlog_snapshot = (
+            self._snapshot_tasks(self._work_tasks),
+            self._snapshot_tasks(self._life_tasks),
+        )
         # Re-opening the dialog wipes undo history — otherwise Ctrl+Z would
         # reach back across reload boundaries and try to restore PlanTask
         # objects whose row/id may have shifted on disk.
@@ -418,6 +555,7 @@ class HabitDialog(QDialog):
         self._redo_stack.clear()
 
         self._render_tasks()
+        self._render_backlogs()
         self._update_stats()
 
         # Yesterday & streak: cheap enough to fetch on every open.
@@ -466,8 +604,10 @@ class HabitDialog(QDialog):
         body.setChildrenCollapsible(False)
         body.addWidget(self._build_habit_card())
         body.addWidget(self._build_task_card())
+        body.addWidget(self._build_backlog_card())
         body.setStretchFactor(0, 1)
         body.setStretchFactor(1, 2)
+        body.setStretchFactor(2, 2)
         outer.addWidget(body, stretch=1)
 
         outer.addLayout(self._build_footer_row())
@@ -590,6 +730,28 @@ class HabitDialog(QDialog):
         title.setObjectName("TitleLabel")
         title_row.addWidget(title)
         title_row.addStretch(1)
+
+        sweep_btn = QPushButton("清理未完成 → Backlog")
+        sweep_btn.setToolTip(
+            "把今天所有未完成的任务按「工作/生活」分类移入 Backlog（可 Ctrl+Z 撤销）"
+        )
+        sweep_btn.setAutoDefault(False)
+        sweep_btn.setCursor(Qt.PointingHandCursor)
+        sweep_btn.setFocusPolicy(Qt.NoFocus)
+        sweep_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  border: 1px solid rgba(255,255,255,0.12);"
+            "  border-radius: 4px;"
+            "  padding: 3px 10px;"
+            "  font-size: 12px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); }"
+        )
+        sweep_btn.clicked.connect(self._sweep_unfinished_to_backlog)
+        title_row.addWidget(sweep_btn)
         layout.addLayout(title_row)
 
         hint = QLabel(
@@ -618,18 +780,8 @@ class HabitDialog(QDialog):
         self.task_stack_host = QWidget()
         self.task_stack = QStackedLayout(self.task_stack_host)
 
-        self.list_widget = QListWidget()
-        self.list_widget.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.list_widget.setDragDropMode(QAbstractItemView.InternalMove)
-        self.list_widget.setMovement(QListWidget.Snap)
-        self.list_widget.itemChanged.connect(self._on_item_text_edited)
-        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
-        self.list_widget.model().rowsMoved.connect(self._on_rows_moved)
+        self.list_widget = _DragDropList(self)
+        self._setup_task_list(self.list_widget, is_backlog=False)
         # Excel-like Enter: when the inline editor closes (Enter / Tab / focus
         # loss) jump to next row. Esc aborts and we leave the cursor put.
         self.list_widget.itemDelegate().closeEditor.connect(self._on_editor_closed)
@@ -687,6 +839,105 @@ class HabitDialog(QDialog):
 
         return row
 
+    def _setup_task_list(self, lw: QListWidget, is_backlog: bool) -> None:
+        """Shared config for the three drag-and-drop task lists."""
+        lw.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
+        lw.setSelectionMode(QAbstractItemView.SingleSelection)
+        lw.setContextMenuPolicy(Qt.CustomContextMenu)
+        # Custom cross-widget drag (see _DragDropList): enable dragging out and
+        # dropping in, but we own the reconciliation in _handle_drop.
+        lw.setDragEnabled(True)
+        lw.setAcceptDrops(True)
+        lw.setDropIndicatorShown(True)
+        lw.setDragDropMode(QAbstractItemView.DragDrop)
+        lw.setDefaultDropAction(Qt.MoveAction)
+        lw.setMovement(QListWidget.Snap)
+        if is_backlog:
+            lw.itemChanged.connect(self._on_backlog_text_edited)
+            lw.customContextMenuRequested.connect(self._show_backlog_context_menu)
+        else:
+            lw.itemChanged.connect(self._on_item_text_edited)
+            lw.customContextMenuRequested.connect(self._show_context_menu)
+
+    def _build_backlog_card(self) -> QWidget:
+        self.backlog_card = QFrame()
+        self.backlog_card.setObjectName("Card")
+        self.backlog_card.setStyleSheet(_card_qss(PANEL_COLOR_HEX))
+
+        layout = QVBoxLayout(self.backlog_card)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        title = QLabel("Backlog")
+        title.setObjectName("TitleLabel")
+        layout.addWidget(title)
+
+        hint = QLabel("拖到「今日要事」开始做 · 从今日拖回这里暂存 · 双击重命名 · 右键更多")
+        hint.setObjectName("HintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        sections = QSplitter(Qt.Vertical)
+        sections.setHandleWidth(2)
+        sections.setChildrenCollapsible(False)
+        sections.addWidget(self._build_backlog_section(TaskCategory.WORK))
+        sections.addWidget(self._build_backlog_section(TaskCategory.LIFE))
+        sections.setStretchFactor(0, 1)
+        sections.setStretchFactor(1, 1)
+        layout.addWidget(sections, stretch=1)
+
+        return self.backlog_card
+
+    def _build_backlog_section(self, category: TaskCategory) -> QWidget:
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        header = QLabel("")
+        header.setStyleSheet(f"font-weight: 600; color: {TEXT_COLOR_HEX};")
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+
+        add_btn = QPushButton("+ 新增")
+        add_btn.setAutoDefault(False)
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  border: 1px solid rgba(255,255,255,0.12);"
+            "  border-radius: 4px;"
+            "  padding: 2px 10px;"
+            "  font-size: 12px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); }"
+        )
+        header_row.addWidget(add_btn)
+        v.addLayout(header_row)
+
+        lw = _DragDropList(self)
+        self._setup_task_list(lw, is_backlog=True)
+        lw.setMinimumHeight(120)
+        v.addWidget(lw, stretch=1)
+
+        if category == TaskCategory.WORK:
+            self.work_list = lw
+            self.work_header = header
+            add_btn.clicked.connect(lambda: self._backlog_add(self.work_list))
+        else:
+            self.life_list = lw
+            self.life_header = header
+            add_btn.clicked.connect(lambda: self._backlog_add(self.life_list))
+
+        return container
+
     def _render_habits(self) -> None:
         while self.habit_layout.count():
             item = self.habit_layout.takeAt(0)
@@ -725,6 +976,56 @@ class HabitDialog(QDialog):
             self.task_stack.setCurrentWidget(self.empty_label)
         else:
             self.task_stack.setCurrentWidget(self.list_widget)
+
+    # ---------- backlog rendering / mapping ----------
+
+    def _tasks_for(self, lw: QListWidget) -> List[PlanTask]:
+        """Return the backing list for one of the three drag-and-drop lists."""
+        if lw is self.list_widget:
+            return self._tasks
+        if lw is self.work_list:
+            return self._work_tasks
+        if lw is self.life_list:
+            return self._life_tasks
+        return []
+
+    def _category_for(self, lw: QListWidget) -> Optional[TaskCategory]:
+        """The category a list represents, or None for the today list."""
+        if lw is self.work_list:
+            return TaskCategory.WORK
+        if lw is self.life_list:
+            return TaskCategory.LIFE
+        return None
+
+    def _list_for_category(self, category: TaskCategory) -> QListWidget:
+        return self.work_list if category == TaskCategory.WORK else self.life_list
+
+    def _render_backlogs(self) -> None:
+        self._render_backlog(self.work_list, self._work_tasks)
+        self._render_backlog(self.life_list, self._life_tasks)
+        self.work_header.setText(
+            f"🏢 工作 ({sum(1 for t in self._work_tasks if (t.text or '').strip())})"
+        )
+        self.life_header.setText(
+            f"🏠 生活 ({sum(1 for t in self._life_tasks if (t.text or '').strip())})"
+        )
+
+    def _render_backlog(self, lw: QListWidget, tasks: List[PlanTask]) -> None:
+        lw.blockSignals(True)
+        lw.clear()
+        for task in tasks:
+            item = QListWidgetItem(_format_backlog(task))
+            flags = item.flags()
+            flags |= Qt.ItemIsEditable | Qt.ItemIsDragEnabled
+            flags &= ~Qt.ItemIsDropEnabled  # drop between rows, not into one
+            item.setFlags(flags)
+            item.setData(_TASK_ROLE, task)
+            item.setForeground(QColor(PENDING_COLOR_HEX))
+            reflection = (task.reflection or "").strip()
+            if reflection:
+                item.setToolTip(f"📝 反思\n\n{reflection}")
+            lw.addItem(item)
+        lw.blockSignals(False)
 
     def _render_yesterday(self, snap: dict) -> None:
         # Cache the snapshot so `_refresh_carryover_visibility` can re-render
@@ -942,7 +1243,10 @@ class HabitDialog(QDialog):
         # PlanTask.text. Find earliest match — everything from there
         # onwards is decoration.
         first_marker = -1
-        for marker in ("   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪", "   📝"):
+        for marker in (
+            "   🎯", "   ⏱", "   🔴", "   🟡", "   ⚪", "   📝",
+            "   🏢", "   🏠", "   ⏳",
+        ):
             idx = text.find(marker)
             if idx >= 0 and (first_marker < 0 or idx < first_marker):
                 first_marker = idx
@@ -1054,21 +1358,46 @@ class HabitDialog(QDialog):
                 duration_minutes=t.duration_minutes,
                 priority=t.priority,
                 reflection=t.reflection,
+                category=t.category,
+                created_date=t.created_date,
             )
             for t in tasks
         ]
 
+    def _snapshot_all(self) -> tuple:
+        """Deep snapshot of all three lists (today / work / life) so a single
+        Ctrl+Z can undo a cross-list drag as one atomic step."""
+        return (
+            self._clone_tasks(self._tasks),
+            self._clone_tasks(self._work_tasks),
+            self._clone_tasks(self._life_tasks),
+        )
+
+    def _restore_all(self, snap: tuple) -> None:
+        today, work, life = snap
+        self._tasks = today
+        self._work_tasks = work
+        self._life_tasks = life
+        self._original_in_progress = next(
+            (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
+            None,
+        )
+        self._render_tasks()
+        self._render_backlogs()
+        self._update_stats()
+
     def _push_undo(self) -> None:
-        """Snapshot the current task list before a user-initiated mutation.
+        """Snapshot all three lists before a user-initiated mutation.
 
         Called from every public mutation entry point (add / delete / move /
         edit / status / priority / duration / reflection / carry-over /
-        focus-pomodoro / drag-reorder). Mutations triggered while replaying
-        an undo or redo are skipped so the two stacks don't fight.
+        focus-pomodoro / drag between lists / backlog edits). Mutations
+        triggered while replaying an undo or redo are skipped so the two
+        stacks don't fight.
         """
         if self._in_undo_redo:
             return
-        self._undo_stack.append(self._clone_tasks(self._tasks))
+        self._undo_stack.append(self._snapshot_all())
         # Cap the history so a long editing session can't bloat memory. 100
         # steps is plenty for this kind of UI.
         if len(self._undo_stack) > 100:
@@ -1080,14 +1409,8 @@ class HabitDialog(QDialog):
             return
         self._in_undo_redo = True
         try:
-            self._redo_stack.append(self._clone_tasks(self._tasks))
-            self._tasks = self._undo_stack.pop()
-            self._original_in_progress = next(
-                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
-                None,
-            )
-            self._render_tasks()
-            self._update_stats()
+            self._redo_stack.append(self._snapshot_all())
+            self._restore_all(self._undo_stack.pop())
         finally:
             self._in_undo_redo = False
 
@@ -1096,14 +1419,8 @@ class HabitDialog(QDialog):
             return
         self._in_undo_redo = True
         try:
-            self._undo_stack.append(self._clone_tasks(self._tasks))
-            self._tasks = self._redo_stack.pop()
-            self._original_in_progress = next(
-                (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
-                None,
-            )
-            self._render_tasks()
-            self._update_stats()
+            self._undo_stack.append(self._snapshot_all())
+            self._restore_all(self._redo_stack.pop())
         finally:
             self._in_undo_redo = False
 
@@ -1168,26 +1485,6 @@ class HabitDialog(QDialog):
         self._render_tasks()
         self.list_widget.setCurrentRow(new_index)
 
-    def _on_rows_moved(self, *args) -> None:
-        # Rebuild self._tasks to match the new visual order using PlanTask refs
-        # we stashed in _TASK_ROLE. Drag-reorder is also undoable, but the
-        # snapshot must be of the *pre-drag* state — Qt has already mutated
-        # the list widget by the time this signal fires, so we reconstruct
-        # the old order by reversing the move logged in `args`.
-        new_order: List[PlanTask] = []
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            task = item.data(_TASK_ROLE)
-            if isinstance(task, PlanTask):
-                new_order.append(task)
-        if len(new_order) == len(self._tasks) and new_order != self._tasks:
-            # Snapshot before swap so Ctrl+Z restores the original order.
-            self._undo_stack.append(self._clone_tasks(self._tasks))
-            if len(self._undo_stack) > 100:
-                del self._undo_stack[0:len(self._undo_stack) - 100]
-            self._redo_stack.clear()
-            self._tasks = new_order
-
     def _add_new_task(self, text: str = "") -> None:
         self._push_undo()
         new_task = PlanTask(text=text, status=TaskStatus.PENDING)
@@ -1249,6 +1546,9 @@ class HabitDialog(QDialog):
                 menu.addAction("📝 编辑反思…", lambda: self._edit_reflection_for_selected())
             menu.addAction("🍅 专注此项  (Ctrl+P)", self._focus_pomodoro_on_selected)
             menu.addAction("⏱ 设置时长…", self._set_duration_for_selected)
+            backlog_menu = menu.addMenu("📥 移入 Backlog")
+            backlog_menu.addAction("🏢 工作", lambda: self._move_today_to_backlog(TaskCategory.WORK))
+            backlog_menu.addAction("🏠 生活", lambda: self._move_today_to_backlog(TaskCategory.LIFE))
             priority_menu = menu.addMenu("🚦 优先级")
             priority_menu.addAction("🔴 P1  必做", lambda: self._set_priority(TaskPriority.P1))
             priority_menu.addAction("🟡 P2  应做", lambda: self._set_priority(TaskPriority.P2))
@@ -1356,6 +1656,7 @@ class HabitDialog(QDialog):
                     duration_minutes=task.duration_minutes,
                     priority=task.priority,
                     reflection=task.reflection,
+                    category=task.category,
                 )
             )
             existing_texts.add(text)
@@ -1398,6 +1699,232 @@ class HabitDialog(QDialog):
 
         QTimer.singleShot(50, _kick)
 
+    # ---------- drag & drop between the three lists ----------
+
+    def _begin_drag(self, source_list: QListWidget, item: QListWidgetItem) -> None:
+        row = source_list.row(item)
+        tasks = self._tasks_for(source_list)
+        if not (0 <= row < len(tasks)):
+            self._clear_drag()
+            return
+        self._drag_source = source_list
+        self._drag_row = row
+        self._drag_payload = tasks[row]
+
+    def _clear_drag(self) -> None:
+        self._drag_source = None
+        self._drag_row = -1
+        self._drag_payload = None
+
+    def _handle_drop(self, target_list: QListWidget, target_row: int) -> None:
+        source_list = self._drag_source
+        payload = self._drag_payload
+        src_index = self._drag_row
+        # Always clear transient drag state first, even on early return.
+        self._clear_drag()
+        if source_list is None or payload is None:
+            return
+        src_tasks = self._tasks_for(source_list)
+        tgt_tasks = self._tasks_for(target_list)
+        # Guard against the model shifting under us between drag start and drop.
+        if not (0 <= src_index < len(src_tasks)) or src_tasks[src_index] is not payload:
+            self._render_tasks()
+            self._render_backlogs()
+            return
+
+        self._push_undo()
+        task = src_tasks.pop(src_index)
+        # Removing from the same list shifts indices above the removal point.
+        if source_list is target_list and src_index < target_row:
+            target_row -= 1
+        target_row = max(0, min(target_row, len(tgt_tasks)))
+
+        if source_list is not target_list:
+            target_category = self._category_for(target_list)
+            if target_category is not None:
+                # Into a backlog pool: stamp category + entry date (keep an
+                # existing date on work<->life moves), pool is all pending.
+                task.category = target_category
+                task.status = TaskStatus.PENDING
+                if not (task.created_date or "").strip():
+                    task.created_date = time.strftime("%Y-%m-%d")
+            else:
+                # Into today: keep its category, come in pending, drop the
+                # pool-only entry date.
+                task.status = TaskStatus.PENDING
+                task.created_date = ""
+
+        tgt_tasks.insert(target_row, task)
+        self._render_tasks()
+        self._render_backlogs()
+        self._update_stats()
+        if target_list is self.list_widget:
+            self.list_widget.setCurrentRow(target_row)
+        else:
+            target_list.setCurrentRow(target_row)
+
+    # ---------- backlog editing / context menu ----------
+
+    def _on_backlog_text_edited(self, item: QListWidgetItem) -> None:
+        lw = self.sender()
+        if not isinstance(lw, QListWidget):
+            return
+        tasks = self._tasks_for(lw)
+        index = lw.row(item)
+        if not (0 <= index < len(tasks)):
+            return
+        new_text = self._strip_glyph(item.text())
+        if tasks[index].text != new_text:
+            self._push_undo()
+            tasks[index].text = new_text
+        # Re-render to normalize decorations / refresh the section count.
+        self._render_backlogs()
+
+    def _edit_backlog_row(self, lw: QListWidget, index: int) -> None:
+        if 0 <= index < lw.count():
+            item = lw.item(index)
+            if item is not None:
+                lw.editItem(item)
+
+    def _backlog_add(self, lw: QListWidget) -> None:
+        category = self._category_for(lw)
+        if category is None:
+            return
+        tasks = self._tasks_for(lw)
+        self._push_undo()
+        new_task = PlanTask(
+            text="",
+            status=TaskStatus.PENDING,
+            category=category,
+            created_date=time.strftime("%Y-%m-%d"),
+        )
+        index = lw.currentRow()
+        if 0 <= index < len(tasks):
+            tasks.insert(index + 1, new_task)
+            target = index + 1
+        else:
+            tasks.append(new_task)
+            target = len(tasks) - 1
+        self._render_backlogs()
+        lw.setCurrentRow(target)
+        QTimer.singleShot(0, lambda r=target: self._edit_backlog_row(lw, r))
+
+    def _backlog_delete(self, lw: QListWidget) -> None:
+        tasks = self._tasks_for(lw)
+        index = lw.currentRow()
+        if not (0 <= index < len(tasks)):
+            return
+        self._push_undo()
+        tasks.pop(index)
+        self._render_backlogs()
+        if tasks:
+            lw.setCurrentRow(min(index, len(tasks) - 1))
+
+    def _backlog_set_priority(self, lw: QListWidget, priority: TaskPriority) -> None:
+        tasks = self._tasks_for(lw)
+        index = lw.currentRow()
+        if not (0 <= index < len(tasks)) or tasks[index].priority == priority:
+            return
+        self._push_undo()
+        tasks[index].priority = priority
+        self._render_backlogs()
+
+    def _backlog_set_duration(self, lw: QListWidget) -> None:
+        tasks = self._tasks_for(lw)
+        index = lw.currentRow()
+        if not (0 <= index < len(tasks)):
+            return
+        task = tasks[index]
+        value = DurationPickerDialog.get_duration(
+            current=task.duration_minutes,
+            task_text=task.text or '（空任务）',
+            parent=self,
+        )
+        if value < 0 or value == task.duration_minutes:
+            return
+        self._push_undo()
+        task.duration_minutes = value
+        self._render_backlogs()
+
+    def _backlog_change_category(self, lw: QListWidget) -> None:
+        src_cat = self._category_for(lw)
+        if src_cat is None:
+            return
+        tasks = self._tasks_for(lw)
+        index = lw.currentRow()
+        if not (0 <= index < len(tasks)):
+            return
+        target_cat = TaskCategory.LIFE if src_cat == TaskCategory.WORK else TaskCategory.WORK
+        self._push_undo()
+        task = tasks.pop(index)
+        task.category = target_cat
+        # Decision I: keep created_date so the "已搁置 N 天" clock is preserved.
+        self._tasks_for(self._list_for_category(target_cat)).append(task)
+        self._render_backlogs()
+
+    def _backlog_pull_to_today(self, lw: QListWidget) -> None:
+        tasks = self._tasks_for(lw)
+        index = lw.currentRow()
+        if not (0 <= index < len(tasks)):
+            return
+        self._push_undo()
+        task = tasks.pop(index)
+        task.status = TaskStatus.PENDING
+        task.created_date = ""
+        self._tasks.append(task)
+        self._render_tasks()
+        self._render_backlogs()
+        self._update_stats()
+        self.list_widget.setCurrentRow(len(self._tasks) - 1)
+
+    def _move_today_to_backlog(self, category: TaskCategory) -> None:
+        index = self.list_widget.currentRow()
+        if not (0 <= index < len(self._tasks)):
+            return
+        self._push_undo()
+        task = self._tasks.pop(index)
+        task.status = TaskStatus.PENDING
+        task.category = category
+        if not (task.created_date or "").strip():
+            task.created_date = time.strftime("%Y-%m-%d")
+        self._tasks_for(self._list_for_category(category)).append(task)
+        self._render_tasks()
+        self._render_backlogs()
+        self._update_stats()
+        if self._tasks:
+            self.list_widget.setCurrentRow(min(index, len(self._tasks) - 1))
+
+    def _show_backlog_context_menu(self, pos: QPoint) -> None:
+        lw = self.sender()
+        if not isinstance(lw, QListWidget):
+            return
+        tasks = self._tasks_for(lw)
+        item = lw.itemAt(pos)
+        menu = QMenu(lw)
+        if item is not None:
+            lw.setCurrentItem(item)
+            menu.addAction("编辑  (双击)", lambda: self._edit_backlog_row(lw, lw.currentRow()))
+            menu.addAction("⬆ 拉到今日", lambda: self._backlog_pull_to_today(lw))
+            other = "生活" if self._category_for(lw) == TaskCategory.WORK else "工作"
+            menu.addAction(f"🔀 改为 {other}", lambda: self._backlog_change_category(lw))
+            menu.addAction("⏱ 设置时长…", lambda: self._backlog_set_duration(lw))
+            priority_menu = menu.addMenu("🚦 优先级")
+            priority_menu.addAction("🔴 P1  必做", lambda: self._backlog_set_priority(lw, TaskPriority.P1))
+            priority_menu.addAction("🟡 P2  应做", lambda: self._backlog_set_priority(lw, TaskPriority.P2))
+            priority_menu.addAction("⚪ P3  可做", lambda: self._backlog_set_priority(lw, TaskPriority.P3))
+            priority_menu.addSeparator()
+            priority_menu.addAction("清除优先级", lambda: self._backlog_set_priority(lw, TaskPriority.NONE))
+            menu.addSeparator()
+        menu.addAction("新增任务", lambda: self._backlog_add(lw))
+        if item is not None:
+            menu.addAction("删除任务", lambda: self._backlog_delete(lw))
+        menu.addSeparator()
+        undo_act = menu.addAction("撤销  (Ctrl+Z)", self._undo)
+        undo_act.setEnabled(bool(self._undo_stack))
+        redo_act = menu.addAction("重做  (Ctrl+Y)", self._redo)
+        redo_act.setEnabled(bool(self._redo_stack))
+        menu.exec(lw.mapToGlobal(pos))
+
     # ---------- stats / header ----------
 
     def _update_header(self) -> None:
@@ -1425,11 +1952,24 @@ class HabitDialog(QDialog):
         )
         p1_count = sum(1 for t in self._tasks if t.priority == TaskPriority.P1)
 
+        life_count = sum(
+            1 for t in self._tasks
+            if (t.text or '').strip() and t.category == TaskCategory.LIFE
+        )
+        work_count = sum(
+            1 for t in self._tasks
+            if (t.text or '').strip() and t.category == TaskCategory.WORK
+        )
+
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
         if p1_count:
             parts.append(f"🔴 {p1_count} 项 P1")
+        # Only surface the work/life split once there's at least one life task;
+        # otherwise everything defaults to work and the badge is just noise.
+        if life_count:
+            parts.append(f"🏢 {work_count} · 🏠 {life_count}")
         if total_minutes:
             hours = total_minutes / 60
             if total_minutes > overload_threshold:
@@ -1596,6 +2136,8 @@ class HabitDialog(QDialog):
             tasks_snapshot,
             self._original_in_progress,
             yesterday_done_rows,
+            work_snapshot=self._clone_tasks(self._work_tasks),
+            life_snapshot=self._clone_tasks(self._life_tasks),
         )
 
     # ---------- unsaved-change detection ----------
@@ -1618,11 +2160,18 @@ class HabitDialog(QDialog):
                 int(t.duration_minutes or 0),
                 t.priority,
                 (t.reflection or "").strip(),
+                t.category,
             ))
         return out
 
     def _has_unsaved_changes(self) -> bool:
         if self._snapshot_tasks(self._tasks) != self._initial_tasks_snapshot:
+            return True
+        current_backlog = (
+            self._snapshot_tasks(self._work_tasks),
+            self._snapshot_tasks(self._life_tasks),
+        )
+        if current_backlog != self._initial_backlog_snapshot:
             return True
         if self._yesterday_marked_done_rows:
             return True
@@ -1660,6 +2209,10 @@ class HabitDialog(QDialog):
         # Esc, the "✕ 关闭" button, and the "跳过" button all funnel through
         # here. Only show the confirmation when there's actually something to
         # lose; otherwise close instantly so the dialog stays out of the way.
+        # NOTE: sweeping unfinished tasks into the Backlog is a *manual* action
+        # (the footer button), deliberately NOT auto-prompted on close — this
+        # dialog is opened often just to glance at today's tasks, and nagging
+        # on every close was annoying.
         if self._closing:
             super().reject()
             return
@@ -1667,6 +2220,46 @@ class HabitDialog(QDialog):
             super().reject()
             return
         self._confirm_unsaved_then_close()
+
+    def _sweep_unfinished_to_backlog(self) -> None:
+        """Manual sweep (footer button): move today's unfinished tasks into the
+        Backlog pools, routed by each task's category and deduped by text.
+
+        Deliberately NOT prompted on close — it's an explicit, user-initiated
+        housekeeping action (and undoable via Ctrl+Z). Completed tasks stay in
+        today as the day's record.
+        """
+        unfinished = [
+            t for t in self._tasks
+            if (t.text or "").strip()
+            and t.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+        ]
+        if not unfinished:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                title="没有需要清理的任务",
+                msg="今天没有未完成的任务。",
+                level=MessageType.SUCCESS,
+            )
+            return
+
+        self._push_undo()
+        for task in unfinished:
+            target = self._tasks_for(self._list_for_category(task.category))
+            text = (task.text or "").strip()
+            if any((x.text or "").strip() == text for x in target):
+                continue  # already pooled — just drop it from today below
+            task.status = TaskStatus.PENDING
+            if not (task.created_date or "").strip():
+                task.created_date = time.strftime("%Y-%m-%d")
+            target.append(task)
+
+        unfinished_ids = {id(t) for t in unfinished}
+        self._tasks = [t for t in self._tasks if id(t) not in unfinished_ids]
+        self._render_tasks()
+        self._render_backlogs()
+        self._update_stats()
 
     def closeEvent(self, event) -> None:
         self._closing = True

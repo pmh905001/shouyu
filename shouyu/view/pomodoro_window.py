@@ -106,6 +106,9 @@ class PomodoroWindow(QWidget):
         self._alarm_active = False
         # Full-screen silent popup used for the office/quiet profile alarm.
         self._overlay: Optional["IdleOverlay"] = None
+        # Centered "该休息了" card shown at the start of a break (see
+        # _maybe_show_break_reminder). Lazily created.
+        self._break_reminder: Optional["BreakReminder"] = None
         # Cached so we can restore exactly what we had after blink ends —
         # the phase may switch while idle (e.g. work → break would also
         # clear the warning), and we want to reflect whatever the latest
@@ -233,6 +236,15 @@ class PomodoroWindow(QWidget):
         self.extend_btn.setVisible(False)
         button_row.addWidget(self.extend_btn)
 
+        # Shown only during a focus phase: finish this pomodoro ahead of time
+        # (task done early) and go straight to the break.
+        self.finish_btn = QPushButton("去休息")
+        self.finish_btn.setToolTip("任务提前做完了？结束这个番茄，直接进入休息（计一个 🍅）")
+        self.finish_btn.setStyleSheet(self._button_style())
+        self.finish_btn.clicked.connect(self._on_finish_early_clicked)
+        self.finish_btn.setVisible(False)
+        button_row.addWidget(self.finish_btn)
+
         self.skip_break_btn = QPushButton("跳过休息")
         self.skip_break_btn.setToolTip("跳过休息，回到专注（不推荐，会被记录）")
         self.skip_break_btn.setStyleSheet(self._button_style())
@@ -310,12 +322,20 @@ class PomodoroWindow(QWidget):
             self._set_task(task_text)
             self._update_tip(phase)
             self.show()
+            # A break just began — announce it prominently so the user doesn't
+            # keep working through it. Any other phase hides a lingering card.
+            if phase in ("short_break", "long_break"):
+                self._maybe_show_break_reminder(phase, duration)
+            else:
+                self._hide_break_reminder()
         elif event == "tick":
             try:
                 remaining = int(payload)
             except ValueError:
                 remaining = 0
             self._set_remaining(remaining)
+            if self._break_reminder is not None and self._break_reminder.isVisible():
+                self._break_reminder.update_remaining(remaining)
         elif event == "extended":
             # phase unchanged; remaining seconds will refresh on next tick
             pass
@@ -325,6 +345,7 @@ class PomodoroWindow(QWidget):
             self._refresh_env_button()
         elif event == "paused":
             self._stop_blink()
+            self._hide_break_reminder()
             self._set_phase("paused")
             self.toggle_btn.setText("继续")
         elif event == "resumed":
@@ -334,6 +355,7 @@ class PomodoroWindow(QWidget):
             self.toggle_btn.setText("暂停")
         elif event == "stopped":
             self._stop_blink()
+            self._hide_break_reminder()
             self._set_phase("idle")
             self._set_remaining(0)
             self._update_tip("idle")
@@ -406,14 +428,17 @@ class PomodoroWindow(QWidget):
             self.extend_btn.setVisible(True)
             self.extend_btn.setText("+5m")
             self.skip_break_btn.setVisible(False)
+            self.finish_btn.setVisible(True)
         elif phase in ("short_break", "long_break"):
             self.extend_btn.setVisible(True)
             self.extend_btn.setText("休息+2m")
             self.skip_break_btn.setVisible(True)
+            self.finish_btn.setVisible(False)
         else:
             # idle / paused / lunch_break: no extend, and lunch can't be skipped
             self.extend_btn.setVisible(False)
             self.skip_break_btn.setVisible(False)
+            self.finish_btn.setVisible(False)
 
     # ---------- button slots ----------
 
@@ -438,6 +463,11 @@ class PomodoroWindow(QWidget):
         from shouyu.service.pomodoro import PomodoroService
 
         PomodoroService.instance().skip_break()
+
+    def _on_finish_early_clicked(self) -> None:
+        from shouyu.service.pomodoro import PomodoroService
+
+        PomodoroService.instance().finish_early()
 
     def _on_ack_clicked(self) -> None:
         from shouyu.service.pomodoro import PomodoroService
@@ -601,6 +631,39 @@ class PomodoroWindow(QWidget):
     def _hide_overlay(self) -> None:
         if self._overlay is not None:
             self._overlay.hide()
+
+    # ---------- break reminder ----------
+
+    def _maybe_show_break_reminder(self, phase: str, remaining: int) -> None:
+        """Pop the centered break card (unless disabled) and bring the timer to
+        the front, so a starting break can't be quietly worked through."""
+        from shouyu.config import Config
+
+        try:
+            style = Config.pomodoro_break_reminder()
+        except Exception:
+            style = 'center'
+        if style == 'off':
+            return
+        if self._break_reminder is None:
+            self._break_reminder = BreakReminder(
+                on_start=self._on_break_start_clicked,
+                on_extend=self._on_extend_clicked,
+                on_skip=self._on_skip_break_clicked,
+            )
+        tip = random.choice(_BREAK_TIPS)
+        # Bring the floating timer forward first, then show the card on top so
+        # the card ends up frontmost/active.
+        self.summon()
+        self._break_reminder.show_reminder(phase, remaining, tip, self.screen())
+
+    def _hide_break_reminder(self) -> None:
+        if self._break_reminder is not None:
+            self._break_reminder.hide()
+
+    def _on_break_start_clicked(self) -> None:
+        # "开始休息" just dismisses the card; the break is already running.
+        self._hide_break_reminder()
 
     def _on_blink_tick(self) -> None:
         # Toggle the 🍅 emoji visibility — text-level blink instead of
@@ -804,3 +867,180 @@ class IdleOverlay(QWidget):
         # easy as possible to dismiss once you've actually come back.
         self._ack()
         super().mousePressEvent(event)
+
+
+class BreakReminder(QWidget):
+    """Centered, hard-to-miss (but calm) card announcing that a break started.
+
+    The floating timer alone is too easy to work straight through — it just
+    sits in the corner. This pops a centered green card so the break actually
+    registers. Unlike the red IdleOverlay it does NOT cover the whole screen
+    and is dismissed in one click (开始休息 / 跳过休息), so it interrupts
+    without being enraging.
+    """
+
+    def __init__(self, on_start, on_extend, on_skip) -> None:
+        super().__init__()
+        self._on_start = on_start
+        self._on_extend = on_extend
+        self._on_skip = on_skip
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setWindowFlag(Qt.Tool, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setFixedSize(460, 250)
+        self._drag_offset: Optional[QPoint] = None
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        card = QFrame()
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {PANEL_COLOR_HEX};
+                border-radius: 16px;
+                border: 2px solid {DONE_COLOR_HEX};
+            }}
+            """
+        )
+        outer.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(28, 22, 28, 22)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignCenter)
+
+        self.title_label = QLabel("☕ 该休息了")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet(
+            f"color: {DONE_COLOR_HEX}; font-size: 26px; font-weight: 800; border: none;"
+        )
+        layout.addWidget(self.title_label)
+
+        self.time_label = QLabel("00:00")
+        self.time_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setStyleSheet(
+            f"color: {TEXT_COLOR_HEX}; font-size: 40px; font-weight: 700; border: none;"
+        )
+        layout.addWidget(self.time_label)
+
+        self.tip_label = QLabel("")
+        self.tip_label.setAlignment(Qt.AlignCenter)
+        self.tip_label.setWordWrap(True)
+        self.tip_label.setStyleSheet(
+            f"color: {SUBTEXT_COLOR_HEX}; font-size: 13px; border: none;"
+        )
+        layout.addWidget(self.tip_label)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+        button_row.setAlignment(Qt.AlignCenter)
+
+        start_btn = QPushButton("开始休息")
+        start_btn.setCursor(Qt.PointingHandCursor)
+        start_btn.setFixedHeight(34)
+        start_btn.setStyleSheet(
+            "QPushButton {"
+            f"  background-color: {DONE_COLOR_HEX};"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 8px;"
+            "  padding: 4px 18px;"
+            "  font-size: 14px;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:hover { background-color: #2F9E44; }"
+        )
+        start_btn.clicked.connect(self._start)
+        button_row.addWidget(start_btn)
+
+        extend_btn = QPushButton("休息 +2m")
+        extend_btn.setCursor(Qt.PointingHandCursor)
+        extend_btn.setFixedHeight(34)
+        extend_btn.setStyleSheet(self._neutral_button_style())
+        extend_btn.clicked.connect(self._extend)
+        button_row.addWidget(extend_btn)
+
+        skip_btn = QPushButton("跳过休息")
+        skip_btn.setToolTip("跳过休息，直接回到专注（会被记录，不推荐）")
+        skip_btn.setCursor(Qt.PointingHandCursor)
+        skip_btn.setFixedHeight(34)
+        skip_btn.setStyleSheet(self._neutral_button_style())
+        skip_btn.clicked.connect(self._skip)
+        button_row.addWidget(skip_btn)
+
+        layout.addLayout(button_row)
+
+    @staticmethod
+    def _neutral_button_style() -> str:
+        return (
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.08);"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 8px;"
+            "  padding: 4px 16px;"
+            "  font-size: 13px;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.18); }"
+        )
+
+    def _start(self) -> None:
+        # "开始休息" simply dismisses the card — the break is already running;
+        # the floating timer keeps the countdown visible.
+        self.hide()
+        if callable(self._on_start):
+            self._on_start()
+
+    def _extend(self) -> None:
+        if callable(self._on_extend):
+            self._on_extend()
+
+    def _skip(self) -> None:
+        self.hide()
+        if callable(self._on_skip):
+            self._on_skip()
+
+    def update_remaining(self, seconds: int) -> None:
+        self.time_label.setText(_format_remaining(seconds))
+
+    def show_reminder(self, phase: str, remaining: int, tip: str, screen) -> None:
+        label = _PHASE_LABEL.get(phase, ("休息", DONE_COLOR_HEX))[0]
+        self.title_label.setText(f"☕ 该{label}了，起来歇会儿")
+        self.update_remaining(remaining)
+        self.tip_label.setText(tip)
+        if screen is None:
+            from PySide6.QtGui import QGuiApplication
+
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self.move(
+                geo.center().x() - self.width() // 2,
+                geo.center().y() - self.height() // 2,
+            )
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    # Let the user nudge the card aside without dismissing it.
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
