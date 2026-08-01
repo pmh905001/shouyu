@@ -26,6 +26,7 @@ from shouyu.service.plan import (
     BACKLOG_HEADER_TEXT,
     BACKLOG_SHEET_LIFE,
     BACKLOG_SHEET_WORK,
+    OTHER_DETAIL_COLUMN,
     BacklogService,
     PlanService,
     TaskCategory,
@@ -194,32 +195,20 @@ class KbExcel:
         else:
             raise RuntimeError(f'Invalid worksheet')
 
-        max_image = self._find_max_image(worksheet)
-        if max_image:
-            if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
-                column = max_image.anchor._from.col + 1 + column_offset
-                row = max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1 + row_offset
-            else:
-                column = self._find_max_column_index(worksheet) + column_offset
-                row = worksheet.max_row + 1 + row_offset
-        else:
-            if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
-                column = 1
-                row = 1 + row_offset
-            else:
-                column = self._find_max_column_index(worksheet) + column_offset
-                row = worksheet.max_row + 1 + row_offset
-
-        # A plain "next free row on the sheet" calculation has no idea where
-        # the plan area's task list ends - on a day with no active-area
-        # content yet, that let a generic append land right in the
-        # plan/active separator row, and `read_plan_tasks()` (which just
-        # scans column B until the first blank cell) would then misread the
-        # appended content - and everything after it - as bogus tasks. Floor
-        # every generic append at the "other" scratch area instead.
-        min_row = PlanService(worksheet).next_other_row()
-        if row < min_row:
-            row = min_row
+        # Every generic append (clipboard/screenshot paste) lands in the
+        # "other" scratch area (see plan.py's OTHER_* constants), never in
+        # the plan/active area - otherwise `read_plan_tasks()` (which just
+        # scans column B until the first blank cell) misreads it as a task.
+        # `next_other_row()` already accounts for existing text AND image
+        # footprints *within that area*, so it fully replaces the old
+        # "find the sheet's overall last row/column" heuristic this used to
+        # use. That old heuristic is exactly what caused pasted text to land
+        # in column A instead of B: it picked up whichever column the
+        # sheet's last row happened to have content in, and right after the
+        # 'other' header is created that's column A (the header itself),
+        # not this area's own content column B.
+        row = PlanService(worksheet).next_other_row() + row_offset
+        column = column_index_from_string(OTHER_DETAIL_COLUMN) + column_offset
         return f'{get_column_letter(column)}{row}'
 
     @staticmethod

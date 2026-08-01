@@ -122,6 +122,36 @@ class Shortcut:
         dispatch.kick()
 
     @classmethod
+    @action_handler
+    def ocr_capture(cls, column=None):
+        """Let the user drag-select a screen region, OCR it, and save the
+        recognized text exactly like a normal clipboard-text save. See
+        docs/screenshot-ocr-design.md. The actual work happens on the Qt
+        thread (region selection is a modal dialog) then a plain background
+        thread (OCR inference) - this just kicks that off and returns so the
+        hotkey executor thread isn't blocked waiting for the user to drag.
+        """
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.request_ocr_capture(column)
+
+    @staticmethod
+    def finish_ocr_capture(image, column):
+        """Runs on a plain background thread once the user has finished
+        selecting a region (see QtApp._on_ocr_capture) - never on the Qt
+        thread, so RapidOCR inference can't freeze the UI."""
+        from shouyu.service import ocr
+
+        text = ocr.extract_text(image).strip()
+        if not text:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(title='OCR', msg='未识别到文字', level=MessageType.ERROR)
+            return
+        pyperclip.copy(text)
+        Shortcut._enqueue_clipboard_save(column)
+
+    @classmethod
     def _generate_collector(cls):
         if BaseCollector.get_process_name() == 'chrome.exe':
             return ChromeCollector()
@@ -257,6 +287,7 @@ class Shortcut:
         short_key = Config.get_shortcut('save_clipboard')
         if short_key:
             keyboard.add_hotkey(short_key, save_clipboard_handler)
+        cls._add_hot_key_from_config('ocr_capture', cls.ocr_capture)
         cls._add_hot_key_from_config('open_excel', cls.open_excel)
         cls._add_hot_key_from_config('close_excel', cls.close_excel, is_in_queue=False)
         cls._add_hot_key_from_config('show_status', cls.show_status)

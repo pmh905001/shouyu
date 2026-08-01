@@ -1,11 +1,12 @@
 {
-  "last_habit_shown_date": "2026-08-01",
-  "last_ritual_date": "2026-08-01",
-  "streak_days": 1,
+  "last_habit_shown_date": "2026-08-02",
+  "last_ritual_date": "2026-08-02",
+  "streak_days": 2,
   "pomodoro_mode": "deep",
-  "last_planning_date": "2026-08-01",
+  "last_planning_date": "2026-08-02",
   "focus_drifts:2026-07-12": 6,
   "focus_drifts:2026-07-26": 5,
   "breaks_skipped:2026-07-26": 2,
-  "focus_drifts:2026-08-01": 2
+  "focus_drifts:2026-08-01": 2,
+  "breaks_skipped:2026-08-02": 1
 }

@@ -24,6 +24,7 @@ class _QtBridge(QObject):
     toggle_pomodoro_window_signal = Signal()
     show_backup_signal = Signal(str)  # payload = path of auto-recovered backup, or ""
     save_status_signal = Signal(str, str, str)  # (level, title, message)
+    ocr_capture_signal = Signal(str)  # payload = target column, or ""
     quit_signal = Signal()
 
     @Slot()
@@ -108,6 +109,31 @@ class _QtBridge(QObject):
         except Exception:
             logging.exception("failed to display save status message")
 
+    @Slot(str)
+    def _on_ocr_capture(self, column: str) -> None:
+        """Show the fullscreen region-selector (blocking, must run on this
+        thread), then hand the cropped image off to a plain background
+        thread for OCR + clipboard + enqueue - so RapidOCR inference never
+        blocks the Qt event loop. See docs/screenshot-ocr-design.md."""
+        try:
+            from shouyu.view.region_selector import RegionSelector
+
+            image = RegionSelector.capture()
+            if image is None:
+                return
+            import threading
+
+            from shouyu.action.shortcut import Shortcut
+
+            threading.Thread(
+                target=Shortcut.finish_ocr_capture,
+                args=(image, column or None),
+                name="shouyu-ocr",
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception("failed to run OCR capture")
+
     @Slot()
     def _on_quit(self) -> None:
         app = QApplication.instance()
@@ -145,6 +171,7 @@ class QtApp:
             )
             cls._bridge.show_backup_signal.connect(cls._bridge._on_show_backup, Qt.QueuedConnection)
             cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
+            cls._bridge.ocr_capture_signal.connect(cls._bridge._on_ocr_capture, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
         finally:
             cls._ready.set()
@@ -216,6 +243,15 @@ class QtApp:
             logging.warning("Qt bridge not ready; cannot show save status")
             return
         cls._bridge.save_status_signal.emit(level or 'info', title or "", message or "")
+
+    @classmethod
+    def request_ocr_capture(cls, column: Optional[str] = None) -> None:
+        """Thread-safe entry to start an OCR region-capture. Safe from any
+        thread (typically the hotkey executor thread)."""
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot start OCR capture")
+            return
+        cls._bridge.ocr_capture_signal.emit(column or "")
 
     @classmethod
     def quit(cls) -> None:
