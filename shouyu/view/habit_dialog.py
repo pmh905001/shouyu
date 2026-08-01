@@ -21,6 +21,7 @@ the footer hint.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import List, Optional
@@ -43,7 +44,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QStackedLayout,
     QVBoxLayout,
@@ -694,25 +694,52 @@ class HabitDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
 
+        title_row = QHBoxLayout()
         title = QLabel("今日习惯")
         title.setObjectName("TitleLabel")
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
 
-        subtitle = QLabel("回顾这些原则可以减少每天反复内耗")
+        add_habit_btn = QPushButton("+ 新增")
+        add_habit_btn.setAutoDefault(False)
+        add_habit_btn.setCursor(Qt.PointingHandCursor)
+        add_habit_btn.setFocusPolicy(Qt.NoFocus)
+        add_habit_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  border: 1px solid rgba(255,255,255,0.12);"
+            "  border-radius: 4px;"
+            "  padding: 2px 10px;"
+            "  font-size: 12px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); }"
+        )
+        add_habit_btn.clicked.connect(self._add_new_habit)
+        title_row.addWidget(add_habit_btn)
+        layout.addLayout(title_row)
+
+        subtitle = QLabel("回顾这些原则可以减少每天反复内耗 · 双击编辑 · 右键更多")
         subtitle.setObjectName("SubtitleLabel")
+        subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        self.habit_container = QWidget()
-        self.habit_layout = QVBoxLayout(self.habit_container)
-        self.habit_layout.setContentsMargins(0, 0, 0, 0)
-        self.habit_layout.setSpacing(8)
-
-        scroll = QScrollArea()
-        scroll.setWidget(self.habit_container)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        layout.addWidget(scroll, stretch=1)
+        self.habit_list = QListWidget()
+        self.habit_list.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
+        self.habit_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.habit_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.habit_list.setFrameShape(QFrame.NoFrame)
+        self.habit_list.setStyleSheet(
+            "QListWidget { background: transparent; border: none; }"
+            "QListWidget::item { padding: 4px 2px; }"
+        )
+        self.habit_list.itemChanged.connect(self._on_habit_text_edited)
+        self.habit_list.customContextMenuRequested.connect(self._show_habit_context_menu)
+        layout.addWidget(self.habit_list, stretch=1)
 
         return self.habit_card
 
@@ -939,17 +966,85 @@ class HabitDialog(QDialog):
         return container
 
     def _render_habits(self) -> None:
-        while self.habit_layout.count():
-            item = self.habit_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        self.habit_list.blockSignals(True)
+        self.habit_list.clear()
         for i, text in enumerate(self._habits, start=1):
-            label = QLabel(f"{i}.  {text}")
-            label.setObjectName("HabitLabel")
-            label.setWordWrap(True)
-            self.habit_layout.addWidget(label)
-        self.habit_layout.addStretch(1)
+            item = QListWidgetItem(f"{i}.  {text}")
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.habit_list.addItem(item)
+        self.habit_list.blockSignals(False)
+
+    @staticmethod
+    def _strip_habit_number(text: str) -> str:
+        return re.sub(r'^\s*\d+\.\s*', '', text or '').strip()
+
+    def _persist_habits(self) -> None:
+        try:
+            Config.save_habits(self._habits)
+        except Exception:
+            logging.exception("failed to save habits")
+
+    def _on_habit_text_edited(self, item: QListWidgetItem) -> None:
+        index = self.habit_list.row(item)
+        if not (0 <= index < len(self._habits)):
+            return
+        new_text = self._strip_habit_number(item.text())
+        if self._habits[index] != new_text:
+            self._push_undo()
+            self._habits[index] = new_text
+            self._persist_habits()
+        # Re-render to normalize the leading "N.  " numbering.
+        self._render_habits()
+        if 0 <= index < self.habit_list.count():
+            self.habit_list.setCurrentRow(index)
+
+    def _edit_habit_row(self, index: int) -> None:
+        if 0 <= index < self.habit_list.count():
+            item = self.habit_list.item(index)
+            if item is not None:
+                self.habit_list.editItem(item)
+
+    def _add_new_habit(self) -> None:
+        self._push_undo()
+        index = self.habit_list.currentRow()
+        if 0 <= index < len(self._habits):
+            self._habits.insert(index + 1, "")
+            target = index + 1
+        else:
+            self._habits.append("")
+            target = len(self._habits) - 1
+        self._persist_habits()
+        self._render_habits()
+        self.habit_list.setCurrentRow(target)
+        QTimer.singleShot(0, lambda r=target: self._edit_habit_row(r))
+
+    def _delete_selected_habit(self) -> None:
+        index = self.habit_list.currentRow()
+        if not (0 <= index < len(self._habits)):
+            return
+        self._push_undo()
+        self._habits.pop(index)
+        self._persist_habits()
+        self._render_habits()
+        if self._habits:
+            self.habit_list.setCurrentRow(min(index, len(self._habits) - 1))
+
+    def _show_habit_context_menu(self, pos: QPoint) -> None:
+        item = self.habit_list.itemAt(pos)
+        menu = QMenu(self.habit_list)
+        if item is not None:
+            self.habit_list.setCurrentItem(item)
+            menu.addAction("编辑  (双击)", lambda: self._edit_habit_row(self.habit_list.currentRow()))
+            menu.addSeparator()
+        menu.addAction("新增习惯", self._add_new_habit)
+        if item is not None:
+            menu.addAction("删除习惯", self._delete_selected_habit)
+        menu.addSeparator()
+        undo_act = menu.addAction("撤销  (Ctrl+Z)", self._undo)
+        undo_act.setEnabled(bool(self._undo_stack))
+        redo_act = menu.addAction("重做  (Ctrl+Y)", self._redo)
+        redo_act.setEnabled(bool(self._redo_stack))
+        menu.exec(self.habit_list.mapToGlobal(pos))
 
     def _render_tasks(self) -> None:
         self.list_widget.blockSignals(True)
@@ -1228,6 +1323,14 @@ class HabitDialog(QDialog):
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(self._edit_selected)
 
+        # Habit list: Delete removes the selected reminder. Add/edit are
+        # covered by the "+ 新增" button and double-click / F2 (EditKeyPressed
+        # trigger), so no Ctrl++/Ctrl+- here — those stay window-wide bindings
+        # for the task list above.
+        habit_delete_sc = QShortcut(QKeySequence("Delete"), self.habit_list)
+        habit_delete_sc.setContext(Qt.WidgetShortcut)
+        habit_delete_sc.activated.connect(self._delete_selected_habit)
+
     # ---------- list interactions ----------
 
     @staticmethod
@@ -1365,26 +1468,31 @@ class HabitDialog(QDialog):
         ]
 
     def _snapshot_all(self) -> tuple:
-        """Deep snapshot of all three lists (today / work / life) so a single
-        Ctrl+Z can undo a cross-list drag as one atomic step."""
+        """Deep snapshot of all three lists (today / work / life) plus the
+        habit list, so a single Ctrl+Z can undo a cross-list drag or a habit
+        edit as one atomic step."""
         return (
             self._clone_tasks(self._tasks),
             self._clone_tasks(self._work_tasks),
             self._clone_tasks(self._life_tasks),
+            list(self._habits),
         )
 
     def _restore_all(self, snap: tuple) -> None:
-        today, work, life = snap
+        today, work, life, habits = snap
         self._tasks = today
         self._work_tasks = work
         self._life_tasks = life
+        self._habits = habits
         self._original_in_progress = next(
             (t.text for t in self._tasks if t.status == TaskStatus.IN_PROGRESS),
             None,
         )
         self._render_tasks()
         self._render_backlogs()
+        self._render_habits()
         self._update_stats()
+        self._persist_habits()
 
     def _push_undo(self) -> None:
         """Snapshot all three lists before a user-initiated mutation.

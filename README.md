@@ -49,6 +49,7 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-07-26
 
+- **修复 Win10/11 锁屏检测失效（锁屏后仍每几秒嘟嘟）**：原先用 `OpenInputDesktop` 返回 NULL 判断锁屏，在现代 Windows 上并不可靠（锁屏后常仍能打开输入桌面→误判未锁）。改为以 `WTSQuerySessionInformationW` + `WTSSessionInfoEx` 的 `SessionFlags` 为主检测（Win8+ 判断锁屏的标准方式，兼容 Win7 的标志位反转），`OpenInputDesktop` 降级为兜底。（`shouyu/util/idle.py`）
 - **番茄进行中切换任务不再重开计时**：专注中再点另一条任务的「专注」，只把当前番茄「换名」继续（保留剩余时间与起始点），不再从满时长重开；同时完成 / 切换「进行中」任务时，番茄窗口的「→ 任务名」会实时同步（无进行中任务则清空），消除陈旧显示。新增服务方法 `set_current_task` 与 `task_changed` 事件。（`shouyu/service/pomodoro.py`、`shouyu/view/pomodoro_window.py`、`shouyu/view/habit_dialog.py`）
 - **番茄钟「去休息」提前结束**：专注阶段新增「去休息」按钮，任务提前做完时可立即结束当前番茄并进入休息（按番茄数决定短休/长休）。提前结束仍计一个 🍅，并按**实际专注时长**记录到 Excel；晨间规划阶段点它则进入规划休息、不计 🍅。（`shouyu/service/pomodoro.py`、`shouyu/view/pomodoro_window.py`）
 - **番茄钟休息提醒卡片**：休息开始时在屏幕居中弹出醒目大卡片（大号倒计时 + 开始休息 / 延长 / 跳过 按钮），避免埋头工作错过休息。可通过 `kb.ini` 的 `break_reminder` 开关控制。（`shouyu/view/pomodoro_window.py`、`shouyu/config.py`）

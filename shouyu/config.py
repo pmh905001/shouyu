@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 
 import iniconfig
@@ -57,6 +58,50 @@ class Config:
             items.append((order, value))
         items.sort(key=lambda x: x[0])
         return [text for _, text in items]
+
+    @classmethod
+    def save_habits(cls, habits):
+        """Rewrite the [habits] section's habit_1..habit_n entries in-place,
+        preserving comments and every other section."""
+        cls._load()  # ensures the ini file exists on disk
+        path = cls.FILE_NAME
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        section_start = None
+        section_end = len(lines)
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == '[habits]':
+                section_start = i
+                continue
+            if section_start is not None and stripped.startswith('[') and stripped.endswith(']'):
+                section_end = i
+                break
+
+        habit_lines = [f'habit_{i}={text}\n' for i, text in enumerate(habits, start=1)]
+
+        if section_start is None:
+            new_lines = list(lines)
+            if new_lines and not new_lines[-1].endswith('\n'):
+                new_lines[-1] += '\n'
+            new_lines.append('\n[habits]\n')
+            new_lines.extend(habit_lines)
+        else:
+            head = lines[:section_start + 1]
+            tail = lines[section_end:]
+            body = [
+                line for line in lines[section_start + 1:section_end]
+                if not re.match(r'habit_\d+\s*=', line.strip())
+            ]
+            trailing_blanks = []
+            while body and body[-1].strip() == '':
+                trailing_blanks.insert(0, body.pop())
+            new_lines = head + body + habit_lines + trailing_blanks + tail
+
+        with open(path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+        cls.ini = None  # force a fresh parse on next read
 
     @classmethod
     def pomodoro_enabled(cls):

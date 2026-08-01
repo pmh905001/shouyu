@@ -29,13 +29,6 @@ QLabel#HintLabel {{
     color: {SUBTEXT_COLOR_HEX};
     font-size: 12px;
 }}
-QLabel#HabitLabel {{
-    font-size: 20px;
-    font-weight: 700;
-    padding: 10px 14px;
-    background-color: {PANEL_COLOR_HEX};
-    border-radius: 8px;
-}}
 QPushButton {{
     background-color: {PANEL_COLOR_HEX};
     color: {TEXT_COLOR_HEX};
