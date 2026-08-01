@@ -1,5 +1,7 @@
 import logging
+import os
 import sys
+import tempfile
 import webbrowser
 
 import psutil
@@ -36,6 +38,7 @@ class Tray:
             MenuItem(text='番茄: 启停', action=cls.on_toggle_pomodoro),
             MenuItem(text='番茄: 显示', action=cls.on_show_pomodoro),
             MenuItem(text='从备份恢复…', action=cls.on_restore_backup),
+            MenuItem(text='查看待同步队列', action=cls.on_show_queue),
             MenuItem(text='开机启动', action=cls.on_turn_on_or_off_auto_running, checked=cls.display_checked),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='显示Excel', action=cls.on_show, default=True, visible=False),
@@ -104,6 +107,21 @@ class Tray:
         from shouyu.view.qt_app import QtApp
 
         QtApp.show_backup_restore()
+
+    @classmethod
+    def on_show_queue(cls, icon, item):
+        """Dump the durable message-queue contents to a text file and open
+        it, for troubleshooting stuck/failed saves. See
+        docs/excel-save-resilience.md §8 / §7 item 9."""
+        from shouyu.service import message_queue
+
+        path = os.path.join(tempfile.gettempdir(), 'shouyu_queue_dump.txt')
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(message_queue.dump_human_readable())
+            ProcessManager.open_file(path)
+        except Exception:
+            logging.exception('failed to dump/open queue contents')
 
     @classmethod
     def display_checked(cls, icon):

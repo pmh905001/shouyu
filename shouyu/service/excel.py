@@ -211,10 +211,18 @@ class KbExcel:
 
         return 1
 
-    def _append_image(self, img: PILImage, anchor: str):
-        img.save(self.IMAGE_PATH)
+    def _append_image(self, img: PILImage, anchor: str, image_path: Optional[str] = None):
+        # openpyxl's Image keeps a *path* reference and only reads bytes off
+        # disk at save() time (not at construction time) - so callers that
+        # stage more than one image before a single save() MUST give each
+        # image its own path, or every embedded image ends up showing
+        # whichever file happened to be written last. `self.IMAGE_PATH` (one
+        # fixed shared path) is only safe for the single-image-then-save-
+        # immediately case; batch dispatchers should pass a unique path.
+        path = image_path or self.IMAGE_PATH
+        img.save(path)
         self._active_worksheet[anchor]=f'Image created at {time.strftime("%Y-%m-%d %H:%M:%S")}'
-        self._active_worksheet.add_image(Image(self.IMAGE_PATH), anchor)
+        self._active_worksheet.add_image(Image(path), anchor)
         logging.info('saved image!')
 
     def _append_text(self, txt: str, anchor: str):
@@ -242,7 +250,7 @@ class KbExcel:
         else:
             self.append_one_record(data, target_col)
 
-    def append_one_record(self, data, target_column=None):
+    def append_one_record(self, data, target_column=None, image_path=None):
         if not data:
             logging.info(f'not save empty or none data!')
             return
@@ -257,7 +265,7 @@ class KbExcel:
             anchor = f'{target_column}{row}'
 
         if isinstance(data, PILImage):
-            self._append_image(data, anchor)
+            self._append_image(data, anchor, image_path=image_path)
             msg = f'{anchor}: Image'
         else:
             self._append_text(data, anchor)

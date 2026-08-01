@@ -12,3 +12,9 @@ kb.log
 pid.txt
 shouyu.egg-info/
 shouyu_state.json
+shouyu.db
+shouyu.db-wal
+shouyu.db-shm
+attachments/
+*.unsaved_*.xlsx
+*_backup_*.xlsx

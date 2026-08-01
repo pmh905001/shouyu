@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 import time
 from typing import List, Optional
 
@@ -248,149 +247,41 @@ def _card_qss(bg_hex: str) -> str:
     return f"QFrame#Card {{ background-color: {bg_hex}; border-radius: 10px; }}"
 
 
-_RETRY_DELAYS_S = [1, 2, 5, 10, 15]  # ~33s of background retry budget
-
-
-def _persist_plan_in_background(
+def _enqueue_plan_save(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
     yesterday_done_rows: Optional[List[int]] = None,
     work_snapshot: Optional[List[PlanTask]] = None,
     life_snapshot: Optional[List[PlanTask]] = None,
 ) -> None:
-    """Run the openpyxl backup+save on a worker thread; the UI returns instantly.
-
-    The most common failure is `PermissionError` because the canonical Excel
-    file is currently open in MS Excel / WPS. We retry transparently with
-    exponential-ish backoff (so closing Excel within ~30 seconds rescues the
-    save automatically), and only bother the user with a popup if all retries
-    are exhausted. In that case we also write the in-memory workbook to a
-    sibling `<name>.unsaved_<ts>.xlsx` so the data is never silently lost.
+    """Enqueue today's plan onto the durable message queue and return
+    immediately; the shared background dispatcher (service/dispatch.py) does
+    the actual Excel write, including all lock-retry handling. See
+    docs/excel-save-resilience.md.
 
     `yesterday_done_rows`: plan-area row numbers in *yesterday's* worksheet
-    that the user just marked as DONE via the carry-over card. Useful for the
-    "I forgot to check off this task yesterday" case.
+    that the user just marked as DONE via the carry-over card. We capture
+    "yesterday" (`yesterday_date`) right now rather than at dispatch time,
+    because dispatch can be delayed (Excel locked) past midnight, at which
+    point `AppState.yesterday_str()` would no longer mean the day the user
+    actually meant.
 
     NOTE: reflections live alongside each task (PlanTask.reflection -> plan
     sheet column E) now, so there is no separate `reflection_text` channel.
     """
+    from shouyu.service import dispatch, message_queue
 
-    def _stage_changes(excel) -> None:
-        non_empty = [t for t in tasks_snapshot if (t.text or "").strip()]
-        plan = excel.plan_service()
-        plan.write_plan_tasks(non_empty)
-        new_in_progress = next(
-            (t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None
-        )
-        if new_in_progress is not None and new_in_progress.text != original_in_progress:
-            plan.switch_in_progress(new_in_progress)
-        if yesterday_done_rows:
-            yesterday_plan = excel.plan_service_for(AppState.yesterday_str())
-            if yesterday_plan is not None:
-                for row in yesterday_done_rows:
-                    if row:
-                        yesterday_plan.mark_plan_done(row)
-        # Backlog pools: full rewrite of each sheet from the in-memory copy.
-        if work_snapshot is not None:
-            excel.backlog_service(TaskCategory.WORK).write(
-                [t for t in work_snapshot if (t.text or "").strip()]
-            )
-        if life_snapshot is not None:
-            excel.backlog_service(TaskCategory.LIFE).write(
-                [t for t in life_snapshot if (t.text or "").strip()]
-            )
-        excel.mark_changed()
-
-    def _notify_retry_started(reason: str) -> None:
-        try:
-            from shouyu.view.msgbox import MessageBox, MessageType
-
-            MessageBox.pop_up_message(
-                title="保存失败 · 后台重试中",
-                msg=f"{reason}（最多 30 秒，请关闭 Excel 后等待）",
-                level=MessageType.ERROR,
-            )
-        except Exception:
-            logging.exception("failed to show retry toast")
-
-    def _notify_success_after_retry(attempt: int) -> None:
-        try:
-            from shouyu.view.msgbox import MessageBox, MessageType
-
-            MessageBox.pop_up_message(
-                title="已保存",
-                msg=f"第 {attempt} 次重试成功",
-                level=MessageType.SUCCESS,
-            )
-        except Exception:
-            logging.exception("failed to show success toast")
-
-    def _notify_final_failure(err: Exception, preserved: str) -> None:
-        try:
-            from shouyu.view.qt_app import QtApp
-
-            is_lock = isinstance(err, PermissionError) or 'Permission' in str(err)
-            if is_lock:
-                msg = (
-                    "保存失败：无法写入 Excel 文件，文件可能正被其他程序（如 MS Excel / WPS）占用。\n\n"
-                    f"已重试 {len(_RETRY_DELAYS_S) + 1} 次仍然失败。"
-                )
-            else:
-                msg = f"保存失败：{err}"
-            if preserved:
-                msg += (
-                    f"\n\n你的改动已经写入备用文件，不会丢失：\n{preserved}\n\n"
-                    "请关闭 Excel，然后下次打开今日任务时按提示恢复，或手动用此备用文件覆盖主文件。"
-                )
-            else:
-                msg += "\n\n（备用文件也写入失败；请手动核对最近的备份。）"
-            QtApp.show_save_status('error', "今日任务保存失败", msg)
-        except Exception:
-            logging.exception("failed to dispatch final-failure popup")
-
-    def _worker():
-        from shouyu.service.excel import KbExcel
-
-        excel: Optional[KbExcel] = None
-        last_err: Optional[Exception] = None
-        notified_retry = False
-
-        for attempt in range(len(_RETRY_DELAYS_S) + 1):
-            try:
-                if excel is None:
-                    excel = KbExcel()
-                    _stage_changes(excel)
-                excel.force_save()
-                if attempt > 0:
-                    _notify_success_after_retry(attempt + 1)
-                return
-            except PermissionError as e:
-                last_err = e
-                logging.warning(
-                    f"save attempt {attempt + 1} failed (locked): {e}"
-                )
-            except Exception as e:
-                last_err = e
-                logging.exception(f"save attempt {attempt + 1} failed")
-                # Non-recoverable error class — don't bother retrying.
-                break
-
-            if attempt < len(_RETRY_DELAYS_S):
-                if not notified_retry:
-                    notified_retry = True
-                    _notify_retry_started("Excel 文件被占用")
-                time.sleep(_RETRY_DELAYS_S[attempt])
-
-        # All retries exhausted — preserve in-memory state and notify.
-        preserved = ''
-        if excel is not None:
-            try:
-                preserved = excel.preserve_unsaved() or ''
-            except Exception:
-                logging.exception("failed to preserve unsaved changes")
-        _notify_final_failure(last_err or RuntimeError("unknown"), preserved)
-
-    threading.Thread(target=_worker, name="shouyu-save-plan", daemon=True).start()
+    payload = {
+        "tasks": [t.to_dict() for t in tasks_snapshot],
+        "original_in_progress": original_in_progress,
+        "yesterday_done_rows": list(yesterday_done_rows) if yesterday_done_rows else [],
+        "yesterday_date": AppState.yesterday_str() if yesterday_done_rows else None,
+        "work_tasks": [t.to_dict() for t in work_snapshot] if work_snapshot is not None else None,
+        "life_tasks": [t.to_dict() for t in life_snapshot] if life_snapshot is not None else None,
+    }
+    message_queue.enqueue("plan_save", payload)
+    dispatch.notify_recorded("今日任务已记录", "后台同步中，Excel 被占用也不会丢失")
+    dispatch.kick()
 
 
 def _read_yesterday_snapshot() -> dict:
@@ -1721,8 +1612,8 @@ class HabitDialog(QDialog):
         actually finished it but forgot to tick the box yesterday.
 
         We only stage the change in memory here. The actual write to
-        yesterday's worksheet happens in `_persist_plan_in_background` so the
-        edit is properly retried/recovered like the rest of the save path.
+        yesterday's worksheet happens via `_enqueue_plan_save` so the edit
+        rides along with the rest of the save path's durability guarantees.
         """
         if not task.row:
             return  # defensive — button should already be disabled in this case
@@ -2253,11 +2144,11 @@ class HabitDialog(QDialog):
     def _dispatch_save(self) -> None:
         # Previously this short-circuited via a `_save_already_dispatched`
         # flag — that meant any second call (e.g. close-after-focus-pomodoro)
-        # silently dropped subsequent edits. Each dispatch now spawns its own
-        # worker; the writes are idempotent so overlapping retries are fine.
+        # silently dropped subsequent edits. Each dispatch enqueues a fresh
+        # durable message; the background dispatcher applies them in order.
         tasks_snapshot = self._clone_tasks(self._tasks)
         yesterday_done_rows = sorted(self._yesterday_marked_done_rows)
-        _persist_plan_in_background(
+        _enqueue_plan_save(
             tasks_snapshot,
             self._original_in_progress,
             yesterday_done_rows,
@@ -2273,7 +2164,7 @@ class HabitDialog(QDialog):
 
         Empty-text tasks are dropped so a stray empty row created by Excel-like
         auto-extend doesn't register as an "edit". Note that this matches the
-        save path (`_persist_plan_in_background` also filters empties).
+        save path (the dispatcher also filters empties before writing).
         """
         out: List[tuple] = []
         for t in tasks:

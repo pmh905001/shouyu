@@ -10,6 +10,7 @@ import keyboard
 from shouyu.action.shortcut import Shortcut
 from shouyu.config import Config
 from shouyu.log import Log
+from shouyu.service import dispatch, message_queue
 from shouyu.service.excel import KbExcel
 from shouyu.util.package import Package
 from shouyu.util.process import ProcessManager
@@ -194,10 +195,25 @@ def _cli_add_title(title: str) -> int:
         return 4
 
 
+def _show_queue_dump() -> int:
+    """`shouyu --show-queue`: print the durable message-queue contents for
+    troubleshooting (see docs/excel-save-resilience.md §8). Read-only."""
+    message_queue.init_db()
+    print(message_queue.dump_human_readable())
+    return 0
+
+
 def _run_daemon():
     """Original startup path — long-running tray + Qt + hotkeys + HTTP."""
     ProcessManager.kill_old_process()
     logging.info('Started service!')
+
+    # Durable queue must be ready before hotkeys can enqueue anything into
+    # it, and the dispatcher's first drain cycle also doubles as startup
+    # recovery for anything left pending from a crash / kill last run.
+    message_queue.init_db()
+    dispatch.start()
+
     tray = Tray.create()
     threading.Thread(target=tray.run, daemon=True).start()
 
@@ -226,6 +242,8 @@ if __name__ == '__main__':
     # daemon-side init (especially kill_old_process) so we don't disturb
     # the long-running shouyu.exe instance.
     cli_args = [a for a in sys.argv[1:] if a.strip()]
+    if cli_args and cli_args[0] == '--show-queue':
+        sys.exit(_show_queue_dump())
     if cli_args:
         title = " ".join(cli_args).strip()
         sys.exit(_cli_add_title(title) if title else 0)

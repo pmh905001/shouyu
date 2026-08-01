@@ -1,7 +1,9 @@
+import io
 import logging
 import os
 import threading
 from functools import partial
+from typing import Optional
 
 import keyboard
 import pyperclip
@@ -78,17 +80,46 @@ class Shortcut:
     @staticmethod
     @action_handler
     def save_clipboard():
-        img = ImageGrab.grabclipboard()
-        copied_text = pyperclip.paste()
-        KbExcel().append(img or copied_text)
+        Shortcut._enqueue_clipboard_save(None)
 
     @classmethod
     @action_handler
     def save_clipboard_to_column(cls, column):
-        ExcelContext.target_column = column
+        cls._enqueue_clipboard_save(column)
+
+    @staticmethod
+    def _enqueue_clipboard_save(column: Optional[str]) -> None:
+        """Grab the clipboard and hand it to the durable queue, then return
+        immediately - the actual Excel write happens later on the shared
+        background dispatcher (service/dispatch.py). This keeps the hotkey
+        response (and the single executor thread that serializes hotkey
+        actions) fast regardless of how big kb.xlsx has grown or whether
+        Excel currently has the file locked. See docs/excel-save-resilience.md.
+        """
         img = ImageGrab.grabclipboard()
         copied_text = pyperclip.paste()
-        KbExcel().append(img or copied_text)
+        if img is None and not copied_text:
+            logging.info('clipboard empty, nothing to save')
+            return
+
+        from shouyu.service import dispatch, message_queue
+
+        if img is not None:
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            attachment_id = message_queue.store_attachment(
+                buf.getvalue(), mime_type='image/png', filename='clipboard.png'
+            )
+            payload = {'column': column}
+            preview = '截图'
+        else:
+            attachment_id = None
+            payload = {'column': column, 'text': copied_text}
+            preview = copied_text[:60]
+
+        message_queue.enqueue('clipboard_append', payload, attachment_id=attachment_id)
+        dispatch.notify_recorded('已记录', preview)
+        dispatch.kick()
 
     @classmethod
     def _generate_collector(cls):

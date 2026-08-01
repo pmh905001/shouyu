@@ -40,6 +40,13 @@ class Config:
         return cls.get(key, default, 'shortcuts', convert)
 
     @classmethod
+    def stuck_alert_minutes(cls):
+        """How long a queued-but-unsynced save (Excel likely locked by
+        another program) must sit pending before the background dispatcher
+        surfaces a toast about it. Default: 30."""
+        return int(cls.get('stuck_alert_minutes', '30'))
+
+    @classmethod
     def habits(cls):
         """Return the habit reminder list, ordered by the numeric suffix of habit_<n>."""
         ini = cls._load()

@@ -174,6 +174,33 @@ class PlanTask:
     def display_text(self) -> str:
         return self.text or ""
 
+    def to_dict(self) -> dict:
+        """JSON-able snapshot, used when a task list is enqueued onto the
+        durable message queue (see service/message_queue.py)."""
+        return {
+            "text": self.text,
+            "status": self.status.value,
+            "row": self.row,
+            "duration_minutes": self.duration_minutes,
+            "priority": self.priority.value,
+            "reflection": self.reflection,
+            "category": self.category.value,
+            "created_date": self.created_date,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PlanTask":
+        return cls(
+            text=data.get("text") or "",
+            status=TaskStatus(data.get("status") or TaskStatus.PENDING.value),
+            row=int(data.get("row") or 0),
+            duration_minutes=int(data.get("duration_minutes") or 0),
+            priority=TaskPriority.from_value(data.get("priority")),
+            reflection=data.get("reflection") or "",
+            category=TaskCategory.from_value(data.get("category")),
+            created_date=data.get("created_date") or "",
+        )
+
 
 @dataclass
 class ActiveEntry:
