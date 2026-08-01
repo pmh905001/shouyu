@@ -40,6 +40,17 @@ class Config:
         return cls.get(key, default, 'shortcuts', convert)
 
     @classmethod
+    def pinned_sheet_names(cls):
+        """Sheet names (besides the daily YYYY-MM-DD tabs) that should always
+        be grouped together at the *end* of the workbook's tab bar, right
+        next to today's date tab, in this exact order - instead of getting
+        pushed further away every time a new day's tab is created.
+        Comma-separated in kb.ini [basic] pinned_sheets. Default: 'todo list'
+        (matches the previous hardcoded behavior)."""
+        raw = cls.get('pinned_sheets', 'todo list')
+        return [name.strip() for name in raw.split(',') if name.strip()]
+
+    @classmethod
     def stuck_alert_minutes(cls):
         """How long a queued-but-unsynced save (Excel likely locked by
         another program) must sit pending before the background dispatcher

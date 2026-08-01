@@ -119,6 +119,21 @@ ACTIVE_DETAIL_COLUMN = "B"
 SEPARATOR_ROWS_AFTER_PLAN = 1
 SEPARATOR_ROWS_BETWEEN_TASKS = 1
 
+# "Other" scratch area: sits after the active area, for pasted/appended
+# content (clipboard text, screenshots) that is NOT a task. Exists so that
+# content never lands inside - or immediately after - the plan area, where
+# `read_plan_tasks()` would otherwise misread it as a task. Previously,
+# generic clipboard/screenshot appends used a plain "next free row on the
+# sheet" heuristic (KbExcel._next_anchor) with no awareness of the plan
+# area's row range; on a day with no active-area content yet, that put the
+# very first paste right into the plan/active separator row, and
+# `read_plan_tasks()` (which just scans column B until the first blank
+# cell) then swallowed it - and everything after it - as bogus "tasks".
+OTHER_HEADER_TEXT = "other"
+OTHER_HEADER_COLUMN = "A"
+OTHER_DETAIL_COLUMN = "B"
+SEPARATOR_ROWS_BEFORE_OTHER = 1
+
 DEFAULT_PLAN_TASKS = ["task 1", "task 2", "task 3"]
 POMODORO_LOG_PREFIX = "🍅"
 
@@ -334,6 +349,18 @@ class PlanService:
                 return True
         return False
 
+    def _active_area_scan_end(self) -> int:
+        """Upper bound (inclusive) for scanning the active area.
+
+        Stops right before the 'other' scratch-area header, if one already
+        exists on this sheet, so pasted scratch content there is never
+        mistaken for an active-area task/detail/image. Falls back to the
+        sheet's actual max row when there's no other-area yet."""
+        other_row = self._other_header_row()
+        if other_row:
+            return other_row - 1
+        return self.ws.max_row
+
     def last_used_row_in_active_area(self) -> int:
         """Return the largest row index in the active area that's occupied —
         either by cell text OR by an image's visual footprint.
@@ -347,7 +374,7 @@ class PlanService:
         """
         start = self.active_area_start_row()
         last = start - 1
-        end = max(self.ws.max_row, start)
+        end = self._active_area_scan_end()
         for row in range(start, end + 1):
             if self._row_has_any_content(row):
                 last = row
@@ -364,7 +391,7 @@ class PlanService:
             except Exception:
                 logging.exception("failed to compute image footprint")
                 continue
-            if top >= start and bottom > last:
+            if start <= top <= end and bottom > last:
                 last = bottom
         return last
 
@@ -372,7 +399,7 @@ class PlanService:
         """All rows in the active area whose A column holds task titles, in order."""
         entries: List[ActiveEntry] = []
         start = self.active_area_start_row()
-        end = max(self.ws.max_row, start)
+        end = self._active_area_scan_end()
         current: Optional[ActiveEntry] = None
         for row in range(start, end + 1):
             a_cell = self.ws.cell(row=row, column=1)
@@ -387,6 +414,59 @@ class PlanService:
                 if self._row_has_any_content(row):
                     current.detail_rows.append(row)
         return entries
+
+    # ---------- "other" scratch area ----------
+
+    def _other_header_row(self) -> int:
+        """Row holding the 'other' section header, or 0 if this sheet
+        doesn't have one yet."""
+        end = max(self.ws.max_row, 1)
+        for row in range(1, end + 1):
+            if str(self.ws.cell(row=row, column=1).value or "").strip() == OTHER_HEADER_TEXT:
+                return row
+        return 0
+
+    def ensure_other_header(self) -> int:
+        """Create the 'other' scratch-area header - right after the active
+        area, with a blank separator - if it doesn't exist yet on this
+        sheet, and return its row (existing or newly created)."""
+        row = self._other_header_row()
+        if row:
+            return row
+        header_row = self.last_used_row_in_active_area() + 1 + SEPARATOR_ROWS_BEFORE_OTHER
+        self.ws.cell(row=header_row, column=1, value=OTHER_HEADER_TEXT)
+        return header_row
+
+    def last_used_row_in_other_area(self) -> int:
+        """Mirrors last_used_row_in_active_area(), scoped to the other area.
+        Returns 0 if the other area doesn't exist yet."""
+        header_row = self._other_header_row()
+        if not header_row:
+            return 0
+        last = header_row
+        end = max(self.ws.max_row, header_row)
+        for row in range(header_row + 1, end + 1):
+            if self._row_has_any_content(row):
+                last = row
+        for img in getattr(self.ws, "_images", None) or []:
+            try:
+                top = img.anchor._from.row + 1
+                if top <= header_row:
+                    continue
+                height_rows = max(1, math.ceil((img.height or 0) / _PIXELS_PER_ROW))
+                bottom = top + height_rows - 1
+            except Exception:
+                logging.exception("failed to compute image footprint")
+                continue
+            if bottom > last:
+                last = bottom
+        return last
+
+    def next_other_row(self) -> int:
+        """Ensure the 'other' header exists and return the next free row
+        under it - the row generic clipboard/screenshot appends should use."""
+        self.ensure_other_header()
+        return self.last_used_row_in_other_area() + 1
 
     def current_in_progress_entry(self) -> Optional[ActiveEntry]:
         for entry in self.list_active_entries():

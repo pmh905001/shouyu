@@ -11,8 +11,10 @@ import openpyxl
 import time
 from PIL.Image import Image as PILImage
 from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor
 from openpyxl.utils import get_column_letter, column_index_from_string
-from openpyxl.utils.cell import coordinate_from_string
+from openpyxl.utils.cell import coordinate_from_string, coordinate_to_tuple
+from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -120,14 +122,25 @@ class KbExcel:
         """Path of the backup we auto-recovered from, or None for a normal load."""
         return self._recovered_from_backup
 
+    def _regroup_pinned_sheets(self) -> None:
+        """Keep the configured pinned sheets (Config.pinned_sheet_names(),
+        e.g. account/work/todo list/backlog-work/backlog-life) grouped
+        together at the very end of the tab bar, in that exact order, right
+        after today's date tab - instead of drifting further and further
+        behind it as new daily tabs pile up. Generalizes what used to be a
+        "todo list"-only hardcoded rule."""
+        pinned = [name for name in Config.pinned_sheet_names() if name in self._workbook.sheetnames]
+        if not pinned:
+            return
+        if self._workbook.sheetnames[-len(pinned):] == pinned:
+            return  # already in the right place, in the right order
+        for name in pinned:
+            worksheet = self._workbook[name]
+            self._workbook.move_sheet(worksheet, offset=len(self._workbook.sheetnames) - 1)
+        self._changed = True
+
     @property
     def _active_worksheet(self) -> Worksheet:
-        if "todo list" in  self._workbook.sheetnames and self._workbook.sheetnames[len(self._workbook.sheetnames)-1] != "todo list":
-           worksheet: Worksheet = self._workbook.get_sheet_by_name("todo list") 
-           self._workbook.move_sheet(worksheet,offset=len(self._workbook.sheetnames)-1)
-           self._changed = True
-           
-        
         if self._worksheet_name not in self._workbook.sheetnames:
             worksheet: Worksheet = self._workbook.create_sheet(self._worksheet_name)
             PlanService(worksheet).seed_default_plan()
@@ -136,6 +149,11 @@ class KbExcel:
         else:
             worksheet: Worksheet = self._workbook.get_sheet_by_name(self._worksheet_name)
             self._workbook.active = worksheet
+
+        # Must run *after* today's tab is ensured above: create_sheet()
+        # always appends at the absolute end, so regrouping first would just
+        # get immediately undone by today's brand-new tab landing after it.
+        self._regroup_pinned_sheets()
 
         for ws in self._workbook.worksheets:
             expected = (ws == worksheet)
@@ -179,14 +197,30 @@ class KbExcel:
         max_image = self._find_max_image(worksheet)
         if max_image:
             if worksheet.max_row < max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1:
-                return f'{get_column_letter(max_image.anchor._from.col + 1 + column_offset)}{max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1 + row_offset}'
+                column = max_image.anchor._from.col + 1 + column_offset
+                row = max_image.anchor._from.row + math.ceil(max_image.height / 18) + 1 + row_offset
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1 + row_offset}'
+                column = self._find_max_column_index(worksheet) + column_offset
+                row = worksheet.max_row + 1 + row_offset
         else:
             if worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet[1][0].value is None:
-                return f'A{1 + row_offset}'
+                column = 1
+                row = 1 + row_offset
             else:
-                return f'{get_column_letter(self._find_max_column_index(worksheet) + column_offset)}{worksheet.max_row + 1 + row_offset}'
+                column = self._find_max_column_index(worksheet) + column_offset
+                row = worksheet.max_row + 1 + row_offset
+
+        # A plain "next free row on the sheet" calculation has no idea where
+        # the plan area's task list ends - on a day with no active-area
+        # content yet, that let a generic append land right in the
+        # plan/active separator row, and `read_plan_tasks()` (which just
+        # scans column B until the first blank cell) would then misread the
+        # appended content - and everything after it - as bogus tasks. Floor
+        # every generic append at the "other" scratch area instead.
+        min_row = PlanService(worksheet).next_other_row()
+        if row < min_row:
+            row = min_row
+        return f'{get_column_letter(column)}{row}'
 
     @staticmethod
     def _find_max_image(sheet: Worksheet) -> Image:
@@ -222,7 +256,26 @@ class KbExcel:
         path = image_path or self.IMAGE_PATH
         img.save(path)
         self._active_worksheet[anchor]=f'Image created at {time.strftime("%Y-%m-%d %H:%M:%S")}'
-        self._active_worksheet.add_image(Image(path), anchor)
+        image_obj = Image(path)
+        self._active_worksheet.add_image(image_obj, anchor)
+        # `add_image()` just stores the raw anchor string as-is
+        # (openpyxl.worksheet.worksheet.Worksheet.add_image: `img.anchor =
+        # anchor`) - it's only normalized into a real OneCellAnchor object
+        # at save() time, and even then the result isn't written back onto
+        # the Image (openpyxl.drawing.spreadsheet_drawing._check_anchor
+        # returns a new anchor, it doesn't mutate obj.anchor). So an image
+        # inspected again in the SAME in-memory session before any save -
+        # e.g. staging several screenshots into one batch, see
+        # service/dispatch.py - would crash on `.anchor._from` in
+        # _find_max_image/_next_anchor below. Normalize immediately so this
+        # image behaves exactly like one freshly loaded from disk.
+        row, col = coordinate_to_tuple(anchor.upper())
+        normalized_anchor = OneCellAnchor()
+        normalized_anchor._from.row = row - 1
+        normalized_anchor._from.col = col - 1
+        normalized_anchor.ext.width = pixels_to_EMU(image_obj.width)
+        normalized_anchor.ext.height = pixels_to_EMU(image_obj.height)
+        image_obj.anchor = normalized_anchor
         logging.info('saved image!')
 
     def _append_text(self, txt: str, anchor: str):
