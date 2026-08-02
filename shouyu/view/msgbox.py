@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from enum import Enum
 
@@ -58,18 +59,34 @@ class MessageBox:
         # time.sleep(duration)
         # win32gui.DestroyWindow(msg_box.hwnd)
         logging.info("pop up message!")
-        toast(
-            title,
-            msg,
-            image=image_path,
-            duration='short',
-            audio={'silent': 'true'},
-            icon=os.path.abspath(
-                Package.get_resource_path(
-                    f'resources/icons/{"success.png" if level == MessageType.SUCCESS else "failed.png"}'
+
+        def _show() -> None:
+            # win11toast.toast() runs `asyncio.run(...)` and blocks until the
+            # toast is dismissed or times out (~5s for duration='short') -
+            # not fire-and-forget despite appearances. Every caller used to
+            # get away with that because it always happened on some
+            # background thread; the moment a caller on the Qt UI thread
+            # (e.g. a button-click handler) calls this synchronously, the
+            # whole app visibly freezes for that ~5s. Always show it on its
+            # own throwaway thread so no caller, anywhere, has to know or
+            # care about this.
+            try:
+                toast(
+                    title,
+                    msg,
+                    image=image_path,
+                    duration='short',
+                    audio={'silent': 'true'},
+                    icon=os.path.abspath(
+                        Package.get_resource_path(
+                            f'resources/icons/{"success.png" if level == MessageType.SUCCESS else "failed.png"}'
+                        )
+                    )
                 )
-            )
-        )
+            except Exception:
+                logging.exception("failed to show toast")
+
+        threading.Thread(target=_show, name="shouyu-toast", daemon=True).start()
 
 
 if __name__ == '__main__':
