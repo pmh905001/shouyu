@@ -173,6 +173,26 @@ class Config:
         return int(cls.get('deep_work_minutes', '90', 'pomodoro'))
 
     @classmethod
+    def pomodoro_window_screen(cls):
+        """Which screen the floating timer window always snaps back to.
+        'primary' = whatever Windows currently calls the primary display, or
+        a resolution like '1920x1200' to pin it to a specific physical
+        screen (typically your laptop's own panel, since that's usually a
+        different resolution than external monitors and - unlike display
+        index/name - stays a stable match across docking/undocking. Default:
+        primary."""
+        return cls.get('window_screen', 'primary', 'pomodoro').strip().lower()
+
+    @classmethod
+    def pomodoro_window_corner(cls):
+        """Which corner of pomodoro_window_screen() the floating timer
+        window always snaps back to when it (re)appears: bottom-right /
+        bottom-left / top-right / top-left. Default: bottom-right."""
+        value = cls.get('window_corner', 'bottom-right', 'pomodoro').strip().lower()
+        valid = ('bottom-right', 'bottom-left', 'top-right', 'top-left')
+        return value if value in valid else 'bottom-right'
+
+    @classmethod
     def pomodoro_deep_short_break_minutes(cls):
         return int(cls.get('deep_short_break_minutes', '15', 'pomodoro'))
 

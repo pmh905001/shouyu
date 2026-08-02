@@ -6,6 +6,7 @@ events from PomodoroService through QtApp.emit_pomodoro_event(...).
 from __future__ import annotations
 
 import random
+import re
 from typing import Optional
 
 from PySide6.QtCore import Qt, QPoint, QTimer
@@ -61,6 +62,9 @@ _WORK_TIPS = [
 def _format_remaining(seconds: int) -> str:
     seconds = max(0, int(seconds))
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+_RESOLUTION_RE = re.compile(r'^(\d+)x(\d+)$')
 
 
 class PomodoroWindow(QWidget):
@@ -293,12 +297,51 @@ class PomodoroWindow(QWidget):
             "QPushButton:hover { background-color: #FF5A50; }"
         )
 
+    def _target_screen(self):
+        """The screen this window should always call home, per
+        Config.pomodoro_window_screen(). Falls back to Qt's primary screen
+        (and ultimately self.screen()) if the configured resolution match
+        isn't found - e.g. right after a monitor was unplugged."""
+        from PySide6.QtGui import QGuiApplication
+
+        from shouyu.config import Config
+
+        spec = Config.pomodoro_window_screen()
+        if spec and spec != 'primary':
+            match = _RESOLUTION_RE.match(spec)
+            if match:
+                width, height = int(match.group(1)), int(match.group(2))
+                for screen in QGuiApplication.screens():
+                    size = screen.size()
+                    if size.width() == width and size.height() == height:
+                        return screen
+        return QGuiApplication.primaryScreen() or self.screen()
+
     def _move_to_default_corner(self) -> None:
-        screen = self.screen()
+        """Snap to the configured corner of the configured screen. Called
+        every time this window (re)appears (summon() / a phase transition) -
+        not just when it drifted fully off-screen - so it can't end up
+        resurfacing on whatever screen happened to be primary right after a
+        monitor reconnect (see docs/multi-monitor-window-management.md).
+        Manual dragging still works for the rest of that same visible
+        session; it resets on the next hide/show cycle."""
+        from shouyu.config import Config
+
+        screen = self._target_screen()
         if screen is None:
             return
         geometry = screen.availableGeometry()
-        self.move(geometry.right() - self.width() - 24, geometry.bottom() - self.height() - 24)
+        margin = 24
+        corner = Config.pomodoro_window_corner()
+        if corner == 'bottom-left':
+            x, y = geometry.left() + margin, geometry.bottom() - self.height() - margin
+        elif corner == 'top-right':
+            x, y = geometry.right() - self.width() - margin, geometry.top() + margin
+        elif corner == 'top-left':
+            x, y = geometry.left() + margin, geometry.top() + margin
+        else:  # bottom-right
+            x, y = geometry.right() - self.width() - margin, geometry.bottom() - self.height() - margin
+        self.move(x, y)
 
     # ---------- event handling ----------
 
@@ -321,6 +364,7 @@ class PomodoroWindow(QWidget):
             self._set_remaining(duration)
             self._set_task(task_text)
             self._update_tip(phase)
+            self._move_to_default_corner()
             self.show()
             # A break just began — announce it prominently so the user doesn't
             # keep working through it. Any other phase hides a lingering card.
@@ -739,12 +783,12 @@ class PomodoroWindow(QWidget):
     def summon(self) -> None:
         """Force the floating window back on screen and to the foreground.
 
-        Used when the user has hidden the window and wants it back. If the
-        window's saved position is now off-screen (e.g. monitor unplugged),
-        we snap it back to the default corner before showing.
+        Used when the user has hidden the window and wants it back. Always
+        snaps back to the configured corner/screen first (see
+        _move_to_default_corner) - not just when fully off-screen - so it
+        can't resurface on the wrong monitor after a reconnect.
         """
-        if not self._is_geometry_on_any_screen():
-            self._move_to_default_corner()
+        self._move_to_default_corner()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -755,17 +799,6 @@ class PomodoroWindow(QWidget):
             self.hide()
         else:
             self.summon()
-
-    def _is_geometry_on_any_screen(self) -> bool:
-        try:
-            from PySide6.QtGui import QGuiApplication
-
-            for screen in QGuiApplication.screens():
-                if screen.availableGeometry().intersects(self.frameGeometry()):
-                    return True
-        except Exception:
-            return True
-        return False
 
     # ---------- visibility tracking ----------
 

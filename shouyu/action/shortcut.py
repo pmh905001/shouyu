@@ -139,13 +139,28 @@ class Shortcut:
     def finish_ocr_capture(image, column):
         """Runs on a plain background thread once the user has finished
         selecting a region (see QtApp._on_ocr_capture) - never on the Qt
-        thread, so RapidOCR inference can't freeze the UI."""
-        from shouyu.service import ocr
+        thread, so RapidOCR inference can't freeze the UI.
 
-        text = ocr.extract_text(image).strip()
+        Deliberately wrapped in its own try/except: this is the *only* code
+        on this thread, so an uncaught exception here would just die
+        silently (Python prints unhandled thread exceptions to stderr,
+        which goes nowhere in a console=False packaged exe and never
+        reaches kb.log) - exactly what made the PyInstaller packaging gap
+        (missing RapidOCR model/config data files) look like "nothing
+        happens" instead of a diagnosable error.
+        """
+        from shouyu.view.msgbox import MessageBox, MessageType
+
+        try:
+            from shouyu.service import ocr
+
+            text = ocr.extract_text(image).strip()
+        except Exception as e:
+            logging.exception('OCR extraction failed')
+            MessageBox.pop_up_message(title='OCR 失败', msg=str(e), level=MessageType.ERROR)
+            return
+
         if not text:
-            from shouyu.view.msgbox import MessageBox, MessageType
-
             MessageBox.pop_up_message(title='OCR', msg='未识别到文字', level=MessageType.ERROR)
             return
         pyperclip.copy(text)
