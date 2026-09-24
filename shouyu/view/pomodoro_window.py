@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import random
 import re
+import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer
+from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QSize, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
     QGuiApplication,
     QKeySequence,
+    QLinearGradient,
     QMouseEvent,
     QPainter,
     QPen,
@@ -78,11 +80,14 @@ _RESOLUTION_RE = re.compile(r'^(\d+)x(\d+)$')
 
 
 _CARD_SIZE = QSize(296, 168)
-_BALL_SIZE = QSize(76, 76)
+# The window is a bit larger than the sphere to leave room for its shadow.
+_BALL_SIZE = QSize(86, 86)
+_BALL_DIAMETER = 72
 
-_WORK_BALL_COLOR = "#D63031"
-_BREAK_BALL_COLOR = "#2F9E44"
-_IDLE_BALL_COLOR = "#6B6B6B"
+# (highlight, body, edge) stops of the sphere's radial gradient.
+_WORK_BALL_COLOR = ("#FF8A80", "#E53935", "#8E0E0E")
+_BREAK_BALL_COLOR = ("#8CEBA0", "#2FB344", "#145A22")
+_IDLE_BALL_COLOR = ("#C9D1D9", "#7D8793", "#3F4750")
 _BALL_COLORS = {
     "working": _WORK_BALL_COLOR,
     "planning": _WORK_BALL_COLOR,
@@ -154,6 +159,7 @@ class PomodoroWindow(QWidget):
 
         self._build_ui()
         self._apply_compact_layout()
+        self._disable_native_frame()
         self._refresh_mode_button()
         self._refresh_env_button()
         self._move_to_default_corner()
@@ -421,8 +427,32 @@ class PomodoroWindow(QWidget):
         y = max(geo.top(), min(y, geo.bottom() + 1 - h))
         self.move(x, y)
 
-    def _ball_color(self) -> str:
+    def _ball_colors(self) -> tuple[str, str, str]:
         return _BALL_COLORS.get(self._phase, _IDLE_BALL_COLOR)
+
+    def _disable_native_frame(self) -> None:
+        """Windows 11 draws its own rounded corners and 1px border around
+        every top-level window, which shows up as a square frame around the
+        ball. Turn both off."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+            dwm = ctypes.windll.dwmapi
+            dwmwa_window_corner_preference, dwmwcp_donotround = 33, 1
+            dwmwa_border_color, dwmwa_color_none = 34, 0xFFFFFFFE
+            dwm.DwmSetWindowAttribute(
+                hwnd, dwmwa_window_corner_preference,
+                ctypes.byref(ctypes.c_int(dwmwcp_donotround)), 4,
+            )
+            dwm.DwmSetWindowAttribute(
+                hwnd, dwmwa_border_color,
+                ctypes.byref(ctypes.c_uint(dwmwa_color_none)), 4,
+            )
+        except Exception:
+            pass
 
     def _ball_caption(self) -> str:
         if self._alarm_active:
@@ -949,43 +979,96 @@ class _BallView(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setFixedSize(_BALL_SIZE)
 
+    @staticmethod
+    def _with_alpha(hex_color: str, alpha: int) -> QColor:
+        color = QColor(hex_color)
+        color.setAlpha(alpha)
+        return color
+
     def paintEvent(self, event) -> None:
         owner = self._owner
+        light, body, edge = owner._ball_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        painter.setPen(Qt.NoPen)
 
-        rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
-        base = QColor(owner._ball_color())
-        gradient = QRadialGradient(rect.center().x() - rect.width() * 0.2,
-                                   rect.center().y() - rect.height() * 0.25,
-                                   rect.width() * 0.75)
-        gradient.setColorAt(0.0, base.lighter(135))
-        gradient.setColorAt(1.0, base.darker(125))
-        painter.setBrush(gradient)
+        d = float(_BALL_DIAMETER)
+        r = d / 2
+        sphere = QRectF((self.width() - d) / 2, (self.height() - d) / 2 - 3, d, d)
+        cx, cy = sphere.center().x(), sphere.center().y()
 
-        alerting = owner._idle_warning_active and owner._blink_on
-        if alerting:
-            painter.setPen(QPen(QColor("#FFD43B"), 3))
-        else:
-            painter.setPen(QPen(QColor(0, 0, 0, 90), 1))
-        painter.drawEllipse(rect)
+        # Soft contact shadow, offset downward so the ball looks lifted.
+        shadow = QRadialGradient(cx, cy + 5, r + 6)
+        shadow.setColorAt(0.0, QColor(0, 0, 0, 90))
+        shadow.setColorAt((r - 4) / (r + 6), QColor(0, 0, 0, 70))
+        shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setBrush(shadow)
+        painter.drawEllipse(QRectF(cx - r - 6, cy + 5 - r - 6, d + 12, d + 12))
 
-        painter.setPen(QColor("white"))
-        time_font = QFont(self.font())
-        time_font.setPixelSize(18)
-        time_font.setBold(True)
-        painter.setFont(time_font)
-        time_rect = QRectF(rect.left(), rect.top() + rect.height() * 0.22,
-                           rect.width(), rect.height() * 0.40)
-        painter.drawText(time_rect, Qt.AlignCenter, owner.time_label.text())
+        # Alert glow ring (idle warning), blinking with the owner's timer.
+        if owner._idle_warning_active and owner._blink_on:
+            glow = QRadialGradient(cx, cy, r + 7)
+            glow.setColorAt(r / (r + 7), QColor(255, 212, 59, 230))
+            glow.setColorAt(1.0, QColor(255, 212, 59, 0))
+            painter.setBrush(glow)
+            painter.drawEllipse(sphere.adjusted(-7, -7, 7, 7))
 
-        caption_font = QFont(self.font())
+        # Sphere body: light source at top-left, deep color at the rim.
+        body_grad = QRadialGradient(cx, cy, r, cx - r * 0.35, cy - r * 0.45)
+        body_grad.setColorAt(0.0, self._with_alpha(light, 245))
+        body_grad.setColorAt(0.55, self._with_alpha(body, 240))
+        body_grad.setColorAt(1.0, self._with_alpha(edge, 250))
+        painter.setBrush(body_grad)
+        painter.drawEllipse(sphere)
+
+        # Light refracted through the glass, pooling at the bottom.
+        glow_bottom = QRadialGradient(cx, cy + r * 0.78, r * 0.75)
+        glow_bottom.setColorAt(0.0, self._with_alpha(light, 150))
+        glow_bottom.setColorAt(1.0, self._with_alpha(light, 0))
+        painter.setBrush(glow_bottom)
+        painter.drawEllipse(sphere)
+
+        # Glossy top reflection.
+        gloss_rect = QRectF(cx - r * 0.66, sphere.top() + r * 0.07, r * 1.32, r * 0.82)
+        gloss = QLinearGradient(gloss_rect.topLeft(), gloss_rect.bottomLeft())
+        gloss.setColorAt(0.0, QColor(255, 255, 255, 185))
+        gloss.setColorAt(0.6, QColor(255, 255, 255, 45))
+        gloss.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(gloss)
+        painter.drawEllipse(gloss_rect)
+
+        # Tiny specular sparkle.
+        spark_c = QPointF(cx - r * 0.42, cy - r * 0.5)
+        spark = QRadialGradient(spark_c, r * 0.16)
+        spark.setColorAt(0.0, QColor(255, 255, 255, 230))
+        spark.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(spark)
+        painter.drawEllipse(spark_c, r * 0.16, r * 0.16)
+
+        # Crisp glass rim.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+        painter.drawEllipse(sphere.adjusted(0.5, 0.5, -0.5, -0.5))
+
+        time_font = QFont("Segoe UI", 1)
+        time_font.setPixelSize(19)
+        time_font.setWeight(QFont.DemiBold)
+        time_rect = QRectF(sphere.left(), sphere.top() + d * 0.26, d, d * 0.36)
+        self._draw_text(painter, time_rect, time_font, owner.time_label.text(), 255)
+
+        caption_font = QFont("Microsoft YaHei UI", 1)
         caption_font.setPixelSize(10)
-        painter.setFont(caption_font)
-        painter.setPen(QColor(255, 255, 255, 210))
-        caption_rect = QRectF(rect.left(), rect.top() + rect.height() * 0.60,
-                              rect.width(), rect.height() * 0.22)
-        painter.drawText(caption_rect, Qt.AlignCenter, owner._ball_caption())
+        caption_rect = QRectF(sphere.left(), sphere.top() + d * 0.60, d, d * 0.18)
+        self._draw_text(painter, caption_rect, caption_font, owner._ball_caption(), 225)
+
+    @staticmethod
+    def _draw_text(painter: QPainter, rect: QRectF, font: QFont, text: str, alpha: int) -> None:
+        painter.setFont(font)
+        painter.setPen(QColor(0, 0, 0, 80))
+        painter.drawText(rect.translated(0, 1), Qt.AlignCenter, text)
+        painter.setPen(QColor(255, 255, 255, alpha))
+        painter.drawText(rect, Qt.AlignCenter, text)
 
 
 class IdleOverlay(QWidget):
