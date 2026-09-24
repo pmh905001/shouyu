@@ -9,8 +9,18 @@ import random
 import re
 from typing import Optional
 
-from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QColor, QMouseEvent, QPainter
+from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QRadialGradient,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -67,6 +77,21 @@ def _format_remaining(seconds: int) -> str:
 _RESOLUTION_RE = re.compile(r'^(\d+)x(\d+)$')
 
 
+_CARD_SIZE = QSize(296, 168)
+_BALL_SIZE = QSize(76, 76)
+
+_WORK_BALL_COLOR = "#D63031"
+_BREAK_BALL_COLOR = "#2F9E44"
+_IDLE_BALL_COLOR = "#6B6B6B"
+_BALL_COLORS = {
+    "working": _WORK_BALL_COLOR,
+    "planning": _WORK_BALL_COLOR,
+    "short_break": _BREAK_BALL_COLOR,
+    "long_break": _BREAK_BALL_COLOR,
+    "lunch_break": _BREAK_BALL_COLOR,
+}
+
+
 class PomodoroWindow(QWidget):
     _instance: Optional["PomodoroWindow"] = None
 
@@ -82,9 +107,16 @@ class PomodoroWindow(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.setWindowFlag(Qt.Tool, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedSize(296, 168)
 
         self._drag_offset: Optional[QPoint] = None
+
+        # Compact mode = the draggable ball (default); expanded = the full
+        # card with buttons. Double-click the ball to expand, Esc to collapse.
+        self._compact = True
+        # The hard idle alarm needs the card's "我回来了" button, so it
+        # expands the ball; remember that so acknowledging collapses it again.
+        self._expanded_by_alarm = False
+        self._phase = "idle"
 
         # Mirror of QWidget visibility, kept in sync via show/hideEvent.
         # Reading QWidget.isVisible() from non-Qt threads (the tray thread,
@@ -121,6 +153,7 @@ class PomodoroWindow(QWidget):
         self._normal_phase_color = SUBTEXT_COLOR_HEX
 
         self._build_ui()
+        self._apply_compact_layout()
         self._refresh_mode_button()
         self._refresh_env_button()
         self._move_to_default_corner()
@@ -128,6 +161,12 @@ class PomodoroWindow(QWidget):
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        self.ball = _BallView(self)
+        outer.addWidget(self.ball)
+
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        esc.activated.connect(lambda: self.set_compact(True))
 
         self.card = QFrame()
         self.card.setStyleSheet(
@@ -343,6 +382,55 @@ class PomodoroWindow(QWidget):
             x, y = geometry.right() - self.width() - margin, geometry.bottom() - self.height() - margin
         self.move(x, y)
 
+    # ---------- compact (ball) / expanded (card) ----------
+
+    def is_compact(self) -> bool:
+        return self._compact
+
+    def set_compact(self, compact: bool) -> None:
+        if compact == self._compact:
+            return
+        self._expanded_by_alarm = False
+        old_geometry = QRect(self.geometry())
+        self._compact = compact
+        self._apply_compact_layout()
+        self._reposition_after_resize(old_geometry)
+        if not compact:
+            self.raise_()
+            self.activateWindow()
+
+    def _apply_compact_layout(self) -> None:
+        self.card.setVisible(not self._compact)
+        self.ball.setVisible(self._compact)
+        self.setFixedSize(_BALL_SIZE if self._compact else _CARD_SIZE)
+        self.setToolTip("双击展开 · 拖动移动" if self._compact else "")
+        self.ball.update()
+
+    def _reposition_after_resize(self, old: QRect) -> None:
+        """Grow/shrink toward the screen center, keeping the edge nearest the
+        screen border fixed, so expanding a ball parked in a corner doesn't
+        push the card off-screen."""
+        screen = QGuiApplication.screenAt(old.center()) or self._target_screen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        w, h = self.width(), self.height()
+        x = old.right() + 1 - w if old.center().x() > geo.center().x() else old.left()
+        y = old.bottom() + 1 - h if old.center().y() > geo.center().y() else old.top()
+        x = max(geo.left(), min(x, geo.right() + 1 - w))
+        y = max(geo.top(), min(y, geo.bottom() + 1 - h))
+        self.move(x, y)
+
+    def _ball_color(self) -> str:
+        return _BALL_COLORS.get(self._phase, _IDLE_BALL_COLOR)
+
+    def _ball_caption(self) -> str:
+        if self._alarm_active:
+            return "🚨 回来"
+        if self._idle_warning_active:
+            return "⚠ 静止"
+        return self._normal_phase_text
+
     # ---------- event handling ----------
 
     def handle_event(self, event: str, payload: str) -> None:
@@ -437,15 +525,18 @@ class PomodoroWindow(QWidget):
         label, color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
         # Remember "what the label should look like when not blinking", so
         # _stop_blink() can restore it without needing to re-poll the service.
+        self._phase = phase
         self._normal_phase_text = label
         self._normal_phase_color = color
         self.phase_label.setText(label)
         self.phase_label.setStyleSheet(
             f"color: {color}; font-size: 12px; font-weight: 600;"
         )
+        self.ball.update()
 
     def _set_remaining(self, seconds: int) -> None:
         self.time_label.setText(_format_remaining(seconds))
+        self.ball.update()
 
     def _set_task(self, text: str) -> None:
         if text:
@@ -638,6 +729,9 @@ class PomodoroWindow(QWidget):
         self._blink_on = True
         self._on_blink_tick()
         self._blink_timer.start()
+        if self._compact:
+            self.set_compact(False)
+            self._expanded_by_alarm = True
         # Force the window back so it can't be ignored from behind other apps.
         self.summon()
 
@@ -669,6 +763,9 @@ class PomodoroWindow(QWidget):
         # in sync immediately).
         self._refresh_cycles_label()
         self._apply_card_alert_style(False)
+        if self._expanded_by_alarm:
+            self.set_compact(True)
+        self.ball.update()
 
     def _show_overlay(self, idle_seconds: int) -> None:
         if self._overlay is None:
@@ -725,6 +822,7 @@ class PomodoroWindow(QWidget):
             # Replace the leading 🍅 with a same-width-ish space so the
             # label width doesn't jump.
             self.cycles_label.setText(snapshot_text.replace("🍅", " ", 1))
+        self.ball.update()
 
     def _apply_card_alert_style(self, alert: bool) -> None:
         border_color = self._ALERT_RED if alert else "#3A3A3A"
@@ -829,6 +927,65 @@ class PomodoroWindow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._drag_offset = None
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if self._compact and event.button() == Qt.LeftButton:
+            self._drag_offset = None
+            self.set_compact(False)
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+
+class _BallView(QWidget):
+    """The compact form of PomodoroWindow: a colored disc (red = focus,
+    green = break, grey = idle/paused) with the countdown in the middle.
+    Mouse events pass through to the parent window, which handles drag and
+    double-click-to-expand."""
+
+    def __init__(self, owner: "PomodoroWindow") -> None:
+        super().__init__(owner)
+        self._owner = owner
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setFixedSize(_BALL_SIZE)
+
+    def paintEvent(self, event) -> None:
+        owner = self._owner
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+        base = QColor(owner._ball_color())
+        gradient = QRadialGradient(rect.center().x() - rect.width() * 0.2,
+                                   rect.center().y() - rect.height() * 0.25,
+                                   rect.width() * 0.75)
+        gradient.setColorAt(0.0, base.lighter(135))
+        gradient.setColorAt(1.0, base.darker(125))
+        painter.setBrush(gradient)
+
+        alerting = owner._idle_warning_active and owner._blink_on
+        if alerting:
+            painter.setPen(QPen(QColor("#FFD43B"), 3))
+        else:
+            painter.setPen(QPen(QColor(0, 0, 0, 90), 1))
+        painter.drawEllipse(rect)
+
+        painter.setPen(QColor("white"))
+        time_font = QFont(self.font())
+        time_font.setPixelSize(18)
+        time_font.setBold(True)
+        painter.setFont(time_font)
+        time_rect = QRectF(rect.left(), rect.top() + rect.height() * 0.22,
+                           rect.width(), rect.height() * 0.40)
+        painter.drawText(time_rect, Qt.AlignCenter, owner.time_label.text())
+
+        caption_font = QFont(self.font())
+        caption_font.setPixelSize(10)
+        painter.setFont(caption_font)
+        painter.setPen(QColor(255, 255, 255, 210))
+        caption_rect = QRectF(rect.left(), rect.top() + rect.height() * 0.60,
+                              rect.width(), rect.height() * 0.22)
+        painter.drawText(caption_rect, Qt.AlignCenter, owner._ball_caption())
 
 
 class IdleOverlay(QWidget):

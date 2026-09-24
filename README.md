@@ -47,6 +47,10 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-09-24
+
+- **番茄钟浮窗改为可拖动小圆球**：浮窗默认缩成 76px 圆球，中间显示倒计时和阶段名；专注/计划为红色，休息/午休为绿色，空闲/暂停为灰色，走神告警时圆球外圈黄色闪烁。双击圆球展开为原来的完整卡片，按 Esc 缩回圆球；展开/收起时朝屏幕中心方向伸缩，避免超出屏幕。触发强告警时自动展开以显示「我回来了」按钮，确认后自动缩回。（`shouyu/view/pomodoro_window.py`）
+
 ## 2026-07-26
 
 - **修复 Win10/11 锁屏检测失效（锁屏后仍每几秒嘟嘟）**：原先用 `OpenInputDesktop` 返回 NULL 判断锁屏，在现代 Windows 上并不可靠（锁屏后常仍能打开输入桌面→误判未锁）。改为以 `WTSQuerySessionInformationW` + `WTSSessionInfoEx` 的 `SessionFlags` 为主检测（Win8+ 判断锁屏的标准方式，兼容 Win7 的标志位反转），`OpenInputDesktop` 降级为兜底。（`shouyu/util/idle.py`）
