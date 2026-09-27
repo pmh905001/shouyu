@@ -159,7 +159,6 @@ class PomodoroWindow(QWidget):
 
         self._build_ui()
         self._apply_compact_layout()
-        self._disable_native_frame()
         self._refresh_mode_button()
         self._refresh_env_button()
         self._move_to_default_corner()
@@ -431,9 +430,9 @@ class PomodoroWindow(QWidget):
         return _BALL_COLORS.get(self._phase, _IDLE_BALL_COLOR)
 
     def _disable_native_frame(self) -> None:
-        """Windows 11 draws its own rounded corners and 1px border around
-        every top-level window, which shows up as a square frame around the
-        ball. Turn both off."""
+        """Windows 11 draws its own rounded corners, 1px border and backdrop
+        around every top-level window, which shows up as a square frame
+        around the ball. Turn them off. Must run after the window is shown."""
         if sys.platform != "win32":
             return
         try:
@@ -933,6 +932,8 @@ class PomodoroWindow(QWidget):
     def showEvent(self, event) -> None:
         self._visible_flag = True
         super().showEvent(event)
+        # DWM ignores these attributes if set before the window is first shown.
+        self._disable_native_frame()
 
     def hideEvent(self, event) -> None:
         self._visible_flag = False

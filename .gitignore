@@ -18,3 +18,4 @@ shouyu.db-shm
 attachments/
 *.unsaved_*.xlsx
 *_backup_*.xlsx
+.aider*
