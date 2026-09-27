@@ -10,9 +10,18 @@ import re
 import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QSize, QTimer
+from PySide6.QtCore import (
+    Qt,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    QTimer,
+)
 from PySide6.QtGui import (
     QColor,
+    QContextMenuEvent,
     QFont,
     QGuiApplication,
     QKeySequence,
@@ -24,10 +33,12 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -309,6 +320,12 @@ class PomodoroWindow(QWidget):
         hide_btn.setStyleSheet(self._button_style())
         hide_btn.clicked.connect(self.hide)
         button_row.addWidget(hide_btn)
+
+        collapse_btn = QPushButton("收起圆球")
+        collapse_btn.setToolTip("回到小圆球模式（也可以按 Esc）")
+        collapse_btn.setStyleSheet(self._button_style())
+        collapse_btn.clicked.connect(lambda: self.set_compact(True))
+        button_row.addWidget(collapse_btn)
 
         layout.addLayout(button_row)
 
@@ -679,6 +696,129 @@ class PomodoroWindow(QWidget):
         svc.set_env_mode(nxt)
         self._refresh_env_button()
 
+    # ---------- ball context menu ----------
+
+    def _show_context_menu(self, position: QPoint) -> None:
+        """Keep the compact window useful without bringing back the large UI.
+
+        The entries intentionally mirror the tray menu and the expanded card,
+        so the ball is a complete control surface rather than just a display.
+        """
+        menu = QMenu(self)
+
+        help_action = menu.addAction("帮助")
+        help_action.triggered.connect(self._on_help)
+        settings_action = menu.addAction("设置")
+        settings_action.triggered.connect(self._on_settings)
+        todo_action = menu.addAction("今日任务")
+        todo_action.triggered.connect(self._on_show_todo)
+        menu.addSeparator()
+
+        toggle_action = menu.addAction("番茄：启停")
+        toggle_action.triggered.connect(self._on_toggle_clicked)
+        show_action = menu.addAction("番茄：显示")
+        show_action.triggered.connect(self.summon)
+        phase = self._phase
+        if phase in ("working", "planning"):
+            extend_action = menu.addAction("延长 5 分钟")
+            extend_action.triggered.connect(self._on_extend_clicked)
+            finish_action = menu.addAction("去休息")
+            finish_action.triggered.connect(self._on_finish_early_clicked)
+        elif phase in ("short_break", "long_break"):
+            extend_action = menu.addAction("休息 +2 分钟")
+            extend_action.triggered.connect(self._on_extend_clicked)
+            skip_action = menu.addAction("跳过休息")
+            skip_action.triggered.connect(self._on_skip_break_clicked)
+        if self._alarm_active:
+            acknowledge_action = menu.addAction("✋ 我回来了")
+            acknowledge_action.triggered.connect(self._on_ack_clicked)
+        menu.addSeparator()
+
+        backup_action = menu.addAction("从备份恢复…")
+        backup_action.triggered.connect(self._on_restore_backup)
+        queue_action = menu.addAction("查看待同步队列")
+        queue_action.triggered.connect(self._on_show_queue)
+        startup_action = menu.addAction("开机启动")
+        startup_action.setCheckable(True)
+        from shouyu.util.reg import Registry
+
+        startup_action.setChecked(Registry.is_auto_run("shouyu"))
+        startup_action.triggered.connect(self._on_toggle_startup)
+        restart_action = menu.addAction("重启")
+        restart_action.triggered.connect(self._on_restart)
+        menu.addSeparator()
+
+        hide_action = menu.addAction(self._hide_action_text())
+        hide_action.setToolTip("隐藏圆球；可用同一个快捷键再次显示")
+        hide_action.triggered.connect(self.hide)
+        menu.addSeparator()
+
+        stop_action = menu.addAction("停止")
+        stop_action.triggered.connect(self._on_stop_clicked)
+        menu.addSeparator()
+
+        exit_action = menu.addAction("退出")
+        exit_action.triggered.connect(self._on_exit)
+        menu.exec(position)
+
+    @staticmethod
+    def _hide_action_text() -> str:
+        from shouyu.config import Config
+
+        shortcut = Config.get_shortcut("toggle_pomodoro_window")
+        return f"隐藏（{shortcut}）" if shortcut else "隐藏"
+
+    @staticmethod
+    def _on_help() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_help(None, None)
+
+    @staticmethod
+    def _on_settings() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_config(None, None)
+
+    @staticmethod
+    def _on_show_todo() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_show_todo(None, None)
+
+    @staticmethod
+    def _on_restore_backup() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_restore_backup(None, None)
+
+    @staticmethod
+    def _on_show_queue() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_show_queue(None, None)
+
+    @staticmethod
+    def _on_toggle_startup() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_turn_on_or_off_auto_running(None, None)
+
+    @staticmethod
+    def _on_restart() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_restart(None, None)
+
+    @staticmethod
+    def _on_exit() -> None:
+        from shouyu.view.tray import Tray
+
+        if Tray._icon is not None:
+            Tray.on_exit(Tray._icon, None)
+        else:
+            QApplication.quit()
+
     def _refresh_env_button(self) -> None:
         from shouyu.service.pomodoro import PomodoroService
 
@@ -941,6 +1081,13 @@ class PomodoroWindow(QWidget):
 
     # ---------- drag support ----------
 
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        if self._compact:
+            self._show_context_menu(event.globalPos())
+            event.accept()
+        else:
+            super().contextMenuEvent(event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -1007,13 +1154,27 @@ class _BallView(QWidget):
         painter.setBrush(shadow)
         painter.drawEllipse(QRectF(cx - r - 6, cy + 5 - r - 6, d + 12, d + 12))
 
-        # Alert glow ring (idle warning), blinking with the owner's timer.
-        if owner._idle_warning_active and owner._blink_on:
-            glow = QRadialGradient(cx, cy, r + 7)
-            glow.setColorAt(r / (r + 7), QColor(255, 212, 59, 230))
-            glow.setColorAt(1.0, QColor(255, 212, 59, 0))
+        # A soft warning halo is always visible during idle detection; the
+        # stronger red/yellow pulse alternates every timer tick so it remains
+        # noticeable even when the ball is small or over a colorful desktop.
+        if owner._idle_warning_active:
+            pulse = owner._blink_on
+            glow = QRadialGradient(cx, cy, r + 10)
+            glow.setColorAt(
+                r / (r + 10),
+                QColor(255, 59, 48, 235 if pulse else 145),
+            )
+            glow.setColorAt(1.0, QColor(255, 59, 48, 0))
             painter.setBrush(glow)
-            painter.drawEllipse(sphere.adjusted(-7, -7, 7, 7))
+            painter.drawEllipse(sphere.adjusted(-10, -10, 10, 10))
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(
+                QPen(
+                    QColor(255, 212, 59) if pulse else QColor(255, 110, 70),
+                    3.0 if pulse else 2.0,
+                )
+            )
+            painter.drawEllipse(sphere.adjusted(-2, -2, 2, 2))
 
         # Sphere body: light source at top-left, deep color at the rim.
         body_grad = QRadialGradient(cx, cy, r, cx - r * 0.35, cy - r * 0.45)
@@ -1051,6 +1212,27 @@ class _BallView(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
         painter.drawEllipse(sphere.adjusted(0.5, 0.5, -0.5, -0.5))
+
+        if owner._idle_warning_active:
+            badge_center = QPointF(sphere.right() - 3, sphere.top() + 4)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#B71C1C"))
+            painter.drawEllipse(badge_center, 9, 9)
+            badge_font = QFont("Segoe UI", 1)
+            badge_font.setPixelSize(12)
+            badge_font.setBold(True)
+            painter.setFont(badge_font)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(
+                QRectF(
+                    badge_center.x() - 8,
+                    badge_center.y() - 8,
+                    16,
+                    16,
+                ),
+                Qt.AlignCenter,
+                "!",
+            )
 
         time_font = QFont("Segoe UI", 1)
         time_font.setPixelSize(19)

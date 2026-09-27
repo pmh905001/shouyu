@@ -100,6 +100,12 @@ def _start_pomodoro_if_enabled():
     from shouyu.service.pomodoro import PomodoroService
 
     svc = PomodoroService.instance()
+    # Prefer the durable in-progress session. This prevents a restart or
+    # crash from starting a fresh planning/work block over the user's last
+    # timer.
+    if svc.restore_session():
+        logging.info('restored in-progress pomodoro session')
+        return
     # The first pomodoro of each day is a short planning session (plan today's
     # tasks) instead of a normal work block. Guard by date so restarting the
     # daemon later in the day resumes straight into work.

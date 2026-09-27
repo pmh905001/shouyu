@@ -1,14 +1,25 @@
 {
-  "last_habit_shown_date": "2026-09-24",
-  "last_ritual_date": "2026-08-02",
-  "streak_days": 2,
+  "last_habit_shown_date": "2026-09-27",
+  "last_ritual_date": "2026-09-27",
+  "streak_days": 1,
   "pomodoro_mode": "deep",
-  "last_planning_date": "2026-09-24",
+  "last_planning_date": "2026-09-27",
   "focus_drifts:2026-07-12": 6,
   "focus_drifts:2026-07-26": 5,
   "breaks_skipped:2026-07-26": 2,
   "focus_drifts:2026-08-01": 2,
   "breaks_skipped:2026-08-02": 1,
   "breaks_skipped:2026-09-24": 2,
-  "focus_drifts:2026-09-24": 1
+  "focus_drifts:2026-09-24": 1,
+  "pomodoro_session": {
+    "date": "2026-09-27",
+    "phase": "working",
+    "phase_before_pause": null,
+    "end_time": 1790488200.135232,
+    "remaining_when_paused": 0.0,
+    "completed_today": 0,
+    "task": "",
+    "task_started_at": 1790485200.3986576
+  },
+  "focus_drifts:2026-09-27": 1
 }

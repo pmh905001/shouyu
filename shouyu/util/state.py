@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from typing import Any, Optional
@@ -43,11 +44,32 @@ class AppState:
         if cls._cache is None:
             return
         path = cls._path()
+        directory = os.path.dirname(path) or '.'
+        temp_path = None
         try:
-            with open(path, 'w', encoding='utf-8') as f:
+            # Replace the state file atomically. A process crash during a
+            # normal in-place write must not destroy the state we need for
+            # pomodoro recovery on the next launch.
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                encoding='utf-8',
+                dir=directory,
+                prefix='.shouyu_state-',
+                suffix='.tmp',
+                delete=False,
+            ) as f:
                 json.dump(cls._cache, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+                temp_path = f.name
+            os.replace(temp_path, path)
         except Exception:
             logging.exception(f'failed to save state file: {path}')
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
     @classmethod
     def get(cls, key: str, default: Any = None) -> Any:
@@ -141,6 +163,22 @@ class AppState:
                 data.pop('env_mode_override', None)
                 data.pop('env_mode_override_date', None)
             cls._save()
+
+    # ---------- pomodoro session recovery ----------
+
+    @classmethod
+    def pomodoro_session(cls) -> Optional[dict]:
+        """Return the last persisted active session, if one exists."""
+        value = cls.get('pomodoro_session')
+        return value if isinstance(value, dict) else None
+
+    @classmethod
+    def set_pomodoro_session(cls, session: dict) -> None:
+        cls.set('pomodoro_session', dict(session))
+
+    @classmethod
+    def clear_pomodoro_session(cls) -> None:
+        cls.delete('pomodoro_session')
 
     @classmethod
     def increment_today_counter(cls, key: str) -> int:

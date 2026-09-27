@@ -137,6 +137,8 @@ class PomodoroService:
         self._timer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._state_lock = threading.RLock()
+        self._last_session_persist_at = 0.0
+        self._restored_session = False
         # Idle-monitor lives for the whole process lifetime; it self-checks
         # `_phase` on each tick so we don't need to start/stop it on phase
         # transitions.
@@ -164,6 +166,8 @@ class PomodoroService:
             self._mode = AppState.pomodoro_mode(default_mode)
         except Exception:
             logging.exception("failed to read pomodoro mode from state")
+
+        self._load_persisted_session()
 
         threading.Thread(
             target=self._idle_monitor_loop,
@@ -200,6 +204,32 @@ class PomodoroService:
                 self._task_text_override = task_text
         self._begin_phase(Phase.WORKING)
 
+    def restore_session(self) -> bool:
+        """Resume the active session loaded during construction.
+
+        This is called after Qt is ready so the restored phase can update the
+        floating window. Stale sessions from a previous day are ignored.
+        """
+        with self._state_lock:
+            if not self._restored_session or self._phase == Phase.IDLE:
+                return False
+            self._restored_session = False
+            phase = self._phase
+            task = self._current_task_text
+            if phase == Phase.PAUSED:
+                phase_to_emit = self._phase_before_pause or Phase.WORKING
+                remaining = int(max(0.0, self._remaining_when_paused))
+            else:
+                phase_to_emit = phase
+                remaining = int(max(0.0, self._end_time - time.time()))
+                self._stop_event = threading.Event()
+                self._spawn_timer_thread_locked()
+
+        self._emit("started", f"{phase_to_emit.value}:{remaining}:{task}")
+        if phase == Phase.PAUSED:
+            self._emit("paused", "")
+        return True
+
     def set_current_task(self, task_text: Optional[str]) -> None:
         """Update which task the current phase is attributed to WITHOUT touching
         the timer (no reset). Pass an explicit string (``""`` clears the label);
@@ -214,6 +244,7 @@ class PomodoroService:
                 self._task_text_override = None
                 self._refresh_current_task_text_locked()
             text = self._current_task_text
+        self._persist_session(force=True)
         self._emit("task_changed", text)
 
     def start_planning(self, task_text: Optional[str] = None) -> None:
@@ -239,6 +270,7 @@ class PomodoroService:
             self._remaining_when_paused = max(0.0, self._end_time - time.time())
             self._phase = Phase.PAUSED
             self._stop_event.set()
+        self._persist_session(force=True)
         self._emit("paused", "")
 
     def resume(self) -> None:
@@ -251,6 +283,7 @@ class PomodoroService:
             self._phase_before_pause = None
             self._stop_event.clear()
             self._spawn_timer_thread_locked()
+        self._persist_session(force=True)
         self._emit("resumed", "")
 
     def stop(self) -> None:
@@ -258,6 +291,7 @@ class PomodoroService:
             self._phase = Phase.IDLE
             self._end_time = 0.0
             self._stop_event.set()
+        self._clear_persisted_session()
         self._emit("stopped", "")
 
     def extend_current_phase(self, minutes: int = 5) -> bool:
@@ -266,6 +300,7 @@ class PomodoroService:
             if self._phase not in (Phase.WORKING, Phase.SHORT_BREAK, Phase.LONG_BREAK):
                 return False
             self._end_time += minutes * 60
+        self._persist_session(force=True)
         self._emit("extended", str(minutes))
         return True
 
@@ -455,6 +490,77 @@ class PomodoroService:
 
     # ---------- internals ----------
 
+    def _load_persisted_session(self) -> None:
+        from shouyu.util.state import AppState
+
+        session = AppState.pomodoro_session()
+        if not session or session.get("date") != AppState.today_str():
+            if session:
+                AppState.clear_pomodoro_session()
+            return
+        try:
+            phase = Phase(session["phase"])
+            if phase == Phase.IDLE:
+                AppState.clear_pomodoro_session()
+                return
+            phase_before_pause = session.get("phase_before_pause")
+            self._phase = phase
+            self._phase_before_pause = (
+                Phase(phase_before_pause) if phase_before_pause else None
+            )
+            self._end_time = float(session.get("end_time", 0.0) or 0.0)
+            self._remaining_when_paused = float(
+                session.get("remaining_when_paused", 0.0) or 0.0
+            )
+            self._completed_today = int(session.get("completed_today", 0) or 0)
+            self._current_task_text = str(session.get("task", "") or "")
+            started_at = session.get("task_started_at")
+            self._current_task_started_at = (
+                float(started_at) if started_at is not None else None
+            )
+            self._restored_session = True
+        except (KeyError, TypeError, ValueError):
+            logging.exception("invalid persisted pomodoro session; discarding it")
+            AppState.clear_pomodoro_session()
+
+    def _persist_session(self, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - self._last_session_persist_at < 5.0:
+            return
+        with self._state_lock:
+            if self._phase == Phase.IDLE:
+                return
+            session = {
+                "date": time.strftime("%Y-%m-%d"),
+                "phase": self._phase.value,
+                "phase_before_pause": (
+                    self._phase_before_pause.value
+                    if self._phase_before_pause is not None
+                    else None
+                ),
+                "end_time": self._end_time,
+                "remaining_when_paused": self._remaining_when_paused,
+                "completed_today": self._completed_today,
+                "task": self._current_task_text,
+                "task_started_at": self._current_task_started_at,
+            }
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.set_pomodoro_session(session)
+            self._last_session_persist_at = now
+        except Exception:
+            logging.exception("failed to persist pomodoro session")
+
+    @staticmethod
+    def _clear_persisted_session() -> None:
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.clear_pomodoro_session()
+        except Exception:
+            logging.exception("failed to clear persisted pomodoro session")
+
     def _begin_phase(self, phase: Phase, duration_override: Optional[int] = None) -> None:
         # Lunch guard: never let a focused (working / planning) phase run
         # during the configured lunch window. Convert it into a lunch break
@@ -483,6 +589,7 @@ class PomodoroService:
                 # Fresh focus block -> reset the drift budget.
                 self._current_phase_drifts = 0
             self._spawn_timer_thread_locked()
+        self._persist_session(force=True)
         self._emit(
             "started",
             f"{phase.value}:{duration}:{self._current_task_text}",
@@ -569,6 +676,7 @@ class PomodoroService:
             if remaining <= 0:
                 self._on_phase_finished(phase)
                 return
+            self._persist_session()
             self._emit("tick", str(int(remaining)))
             stop_event.wait(min(remaining, 1.0))
 
