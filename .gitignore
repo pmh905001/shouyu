@@ -9,6 +9,7 @@ build/
 dist/
 shouyu.spec
 kb.log
+crash.log
 pid.txt
 shouyu.egg-info/
 shouyu_state.json

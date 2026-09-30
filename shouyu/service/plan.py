@@ -19,6 +19,7 @@ Status is encoded by font color (and a couple of decorations):
 
     pending      gray
     in_progress  red, bold
+    suspended    amber/yellow
     done         green, strike-through
 """
 from __future__ import annotations
@@ -42,6 +43,7 @@ _PIXELS_PER_ROW = 18
 class TaskStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
+    SUSPENDED = "suspended"
     DONE = "done"
 
 
@@ -84,6 +86,7 @@ class TaskCategory(str, Enum):
 # openpyxl exposes colors as ARGB hex strings ("00RRGGBB") in most cases.
 PENDING_COLOR = "FF808080"
 IN_PROGRESS_COLOR = "FFC00000"
+SUSPENDED_COLOR = "FFF4B400"
 DONE_COLOR = "FF107C10"
 
 PLAN_HEADER_CELL = "A1"
@@ -141,6 +144,8 @@ POMODORO_LOG_PREFIX = "🍅"
 def _font_for(status: TaskStatus) -> Font:
     if status == TaskStatus.IN_PROGRESS:
         return Font(color=IN_PROGRESS_COLOR, bold=True)
+    if status == TaskStatus.SUSPENDED:
+        return Font(color=SUSPENDED_COLOR, bold=True)
     if status == TaskStatus.DONE:
         return Font(color=DONE_COLOR, strike=True)
     return Font(color=PENDING_COLOR)
@@ -162,6 +167,8 @@ def _status_from_cell(cell) -> TaskStatus:
     color = _normalize_color(getattr(font, "color", None))
     if color == IN_PROGRESS_COLOR:
         return TaskStatus.IN_PROGRESS
+    if color == SUSPENDED_COLOR:
+        return TaskStatus.SUSPENDED
     if color == DONE_COLOR:
         return TaskStatus.DONE
     return TaskStatus.PENDING
@@ -294,6 +301,7 @@ class PlanService:
         """Persist tasks into the plan area, clearing any orphan rows below."""
         self.ensure_header()
         existing = self.read_plan_tasks()
+        self._make_room_before_other(len(tasks))
         max_row_to_clear = max(
             [t.row for t in existing] + [PLAN_FIRST_TASK_ROW + len(tasks) - 1, PLAN_FIRST_TASK_ROW]
         )
@@ -329,6 +337,30 @@ class PlanService:
                 cell = self.ws[f"{column}{row}"]
                 cell.value = None
                 cell.font = Font()
+
+    def _make_room_before_other(self, task_count: int) -> None:
+        """Move the scratch ``other`` section down before the plan grows.
+
+        The plan and ``other`` sections share a worksheet. Historically a
+        longer task list wrote directly over the ``other`` header/content.
+        ``insert_rows`` moves cell data and styles; openpyxl does not reliably
+        move drawing anchors, so image anchors are adjusted explicitly too.
+        """
+        other_row = self._other_header_row()
+        if not other_row:
+            return
+        target_end = PLAN_FIRST_TASK_ROW + max(task_count, 1) - 1
+        if target_end < other_row:
+            return
+        amount = target_end - other_row + 1
+        self.ws.insert_rows(other_row, amount=amount)
+        for image in getattr(self.ws, "_images", None) or []:
+            try:
+                top_row = image.anchor._from.row + 1
+                if top_row >= other_row:
+                    image.anchor._from.row += amount
+            except Exception:
+                logging.exception("failed to move other-area image with plan growth")
 
     def plan_end_row(self) -> int:
         """Return the last row that holds plan content; PLAN_FIRST_TASK_ROW - 1 if empty."""

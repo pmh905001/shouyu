@@ -39,6 +39,8 @@ class Tray:
             MenuItem(text='番茄: 显示', action=cls.on_show_pomodoro),
             MenuItem(text='从备份恢复…', action=cls.on_restore_backup),
             MenuItem(text='查看待同步队列', action=cls.on_show_queue),
+            MenuItem(text='查看错误日志', action=cls.on_show_log),
+            MenuItem(text='查看崩溃诊断日志', action=cls.on_show_crash_log),
             MenuItem(text='开机启动', action=cls.on_turn_on_or_off_auto_running, checked=cls.display_checked),
             MenuItem(text='重启', action=cls.on_restart),
             MenuItem(text='显示Excel', action=cls.on_show, default=True, visible=False),
@@ -49,6 +51,7 @@ class Tray:
     @classmethod
     def on_exit(cls, icon, item):
         logging.info('Stopping service!')
+        ProcessManager.mark_shutdown_requested()
         icon.stop()
         # sys.exit() can stop tray only, but the keyboard is still running.
         psutil.Process().terminate()
@@ -122,6 +125,19 @@ class Tray:
             ProcessManager.open_file(path)
         except Exception:
             logging.exception('failed to dump/open queue contents')
+
+    @classmethod
+    def on_show_log(cls, icon, item):
+        path = Config.log_path()
+        ProcessManager.open_file(path)
+
+    @classmethod
+    def on_show_crash_log(cls, icon, item):
+        path = Config.crash_log_path()
+        if os.path.exists(path):
+            ProcessManager.open_file(path)
+        else:
+            logging.info('crash diagnostics log does not exist yet: %s', path)
 
     @classmethod
     def display_checked(cls, icon):

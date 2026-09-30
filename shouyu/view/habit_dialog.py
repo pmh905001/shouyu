@@ -25,7 +25,7 @@ import re
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer
+from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -65,6 +65,7 @@ from shouyu.view.styles import (
     IN_PROGRESS_COLOR_HEX,
     PANEL_COLOR_HEX,
     PENDING_COLOR_HEX,
+    SUSPENDED_COLOR_HEX,
     SUBTEXT_COLOR_HEX,
     TEXT_COLOR_HEX,
 )
@@ -73,12 +74,14 @@ from shouyu.view.styles import (
 _GLYPH = {
     TaskStatus.PENDING: "○",
     TaskStatus.IN_PROGRESS: "▶",
+    TaskStatus.SUSPENDED: "⏸",
     TaskStatus.DONE: "✓",
 }
 
 _COLORS = {
     TaskStatus.PENDING: PENDING_COLOR_HEX,
     TaskStatus.IN_PROGRESS: IN_PROGRESS_COLOR_HEX,
+    TaskStatus.SUSPENDED: SUSPENDED_COLOR_HEX,
     TaskStatus.DONE: DONE_COLOR_HEX,
 }
 
@@ -251,6 +254,7 @@ def _enqueue_plan_save(
     tasks_snapshot: List[PlanTask],
     original_in_progress: Optional[str],
     yesterday_done_rows: Optional[List[int]] = None,
+    yesterday_date: Optional[str] = None,
     work_snapshot: Optional[List[PlanTask]] = None,
     life_snapshot: Optional[List[PlanTask]] = None,
 ) -> None:
@@ -275,7 +279,7 @@ def _enqueue_plan_save(
         "tasks": [t.to_dict() for t in tasks_snapshot],
         "original_in_progress": original_in_progress,
         "yesterday_done_rows": list(yesterday_done_rows) if yesterday_done_rows else [],
-        "yesterday_date": AppState.yesterday_str() if yesterday_done_rows else None,
+        "yesterday_date": yesterday_date if yesterday_done_rows else None,
         "work_tasks": [t.to_dict() for t in work_snapshot] if work_snapshot is not None else None,
         "life_tasks": [t.to_dict() for t in life_snapshot] if life_snapshot is not None else None,
     }
@@ -284,14 +288,20 @@ def _enqueue_plan_save(
     dispatch.kick()
 
 
-def _read_yesterday_snapshot() -> dict:
-    """Return {'unfinished': [PlanTask...], 'done': N, 'total': N, 'pomodoros': N}."""
-    out = {"unfinished": [], "done": 0, "total": 0, "pomodoros": 0}
+def _read_day_snapshot(date_str: str, excel=None) -> dict:
+    """Read unfinished tasks and summary data from one dated worksheet."""
+    out = {
+        "date": date_str,
+        "unfinished": [],
+        "done": 0,
+        "total": 0,
+        "pomodoros": 0,
+    }
     try:
         from shouyu.service.excel import KbExcel
 
-        excel = KbExcel()
-        plan = excel.plan_service_for(AppState.yesterday_str())
+        excel = excel or KbExcel()
+        plan = excel.plan_service_for(date_str)
         if plan is None:
             return out
         tasks = plan.read_plan_tasks()
@@ -315,8 +325,13 @@ def _read_yesterday_snapshot() -> dict:
         ]
         out["pomodoros"] = plan.count_pomodoros_logged()
     except Exception:
-        logging.exception("failed to read yesterday snapshot")
+        logging.exception("failed to read day snapshot: %s", date_str)
     return out
+
+
+def _read_yesterday_snapshot() -> dict:
+    """Backward-compatible wrapper for callers that still mean yesterday."""
+    return _read_day_snapshot(AppState.yesterday_str())
 
 
 class HabitDialog(QDialog):
@@ -353,6 +368,8 @@ class HabitDialog(QDialog):
         self._drag_payload: Optional[PlanTask] = None
         self._original_in_progress: Optional[str] = None
         self._closing = False
+        self._window_maximized = True
+        self._normal_geometry: Optional[QRect] = None
         # Snapshot of the plan state right after the last load from Excel.
         # Used by `_has_unsaved_changes` so Esc / 关闭 can warn the user before
         # silently dropping their edits.
@@ -360,6 +377,7 @@ class HabitDialog(QDialog):
         # When the user picks "不保存" in the confirmation dialog we still
         # need closeEvent to skip the auto-save it would normally do.
         self._skip_save_on_close = False
+        self._selected_history_date = ""
         self._yesterday_unfinished: List[PlanTask] = []
         # Subset of _yesterday_unfinished that we actually render in the
         # carry-over card right now (after filtering out items the user
@@ -382,6 +400,7 @@ class HabitDialog(QDialog):
         # finishes typing the new task's name (rather than nagging on every edit).
         self._pending_duration_prompt: set = set()
         self._suppress_advance_once = False
+        self._reflection_toast: Optional["ReflectionToast"] = None
 
         # Undo / redo. Each entry is a deep snapshot of self._tasks taken
         # right BEFORE a user-initiated mutation. Ctrl+Z pops from undo and
@@ -449,11 +468,9 @@ class HabitDialog(QDialog):
         self._render_backlogs()
         self._update_stats()
 
-        # Yesterday & streak: cheap enough to fetch on every open.
-        snap = _read_yesterday_snapshot()
-        self._yesterday_unfinished = list(snap["unfinished"])
+        # Carry-over history & streak: cheap enough to fetch on every open.
         self._yesterday_marked_done_rows = set()
-        self._render_yesterday(snap)
+        self._select_latest_history_day()
         self._render_streak()
 
     def show_fullscreen(self) -> None:
@@ -470,13 +487,42 @@ class HabitDialog(QDialog):
         self._apply_time_theme()
 
         screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
+        if screen is not None and self._window_maximized:
             rect = screen.availableGeometry()
             self.setGeometry(rect)
+        self._refresh_window_state_button()
         self.show()
         self.raise_()
         self.activateWindow()
         self.list_widget.setFocus()
+
+    def _refresh_window_state_button(self) -> None:
+        if self._window_maximized:
+            self.window_state_btn.setText("❐ 还原")
+            self.window_state_btn.setToolTip("还原窗口大小")
+        else:
+            self.window_state_btn.setText("□ 最大化")
+            self.window_state_btn.setToolTip("最大化窗口")
+
+    def _toggle_window_size(self) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        if self._window_maximized:
+            width = min(1120, max(640, available.width() - 80))
+            height = min(720, max(480, available.height() - 80))
+            self._normal_geometry = QRect(0, 0, width, height)
+            self._normal_geometry.moveCenter(available.center())
+            self._window_maximized = False
+            self.setGeometry(self._normal_geometry)
+        else:
+            self._normal_geometry = QRect(self.geometry())
+            self._window_maximized = True
+            self.setGeometry(available)
+        self._refresh_window_state_button()
+        self.raise_()
+        self.activateWindow()
 
     # ---------- ui ----------
 
@@ -521,6 +567,26 @@ class HabitDialog(QDialog):
             'font-family: "Microsoft YaHei UI", "Segoe UI", "Segoe UI Emoji";'
         )
         row.addWidget(self.streak_label)
+
+        self.window_state_btn = QPushButton("❐ 还原")
+        self.window_state_btn.setToolTip("还原窗口大小")
+        self.window_state_btn.setMinimumSize(92, 34)
+        self.window_state_btn.setAutoDefault(False)
+        self.window_state_btn.setFocusPolicy(Qt.NoFocus)
+        self.window_state_btn.setStyleSheet(
+            "QPushButton {"
+            "  font-size: 13px;"
+            "  background-color: rgba(255, 255, 255, 0.06);"
+            "  border: 1px solid rgba(255, 255, 255, 0.18);"
+            "  border-radius: 6px;"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  padding: 4px 10px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.14); }"
+        )
+        self.window_state_btn.clicked.connect(self._toggle_window_size)
+        row.addWidget(self.window_state_btn)
 
         close_btn = QPushButton("✕  关闭")
         close_btn.setToolTip("关闭今日任务窗口 (Esc)")
@@ -680,6 +746,49 @@ class HabitDialog(QDialog):
         hint.setObjectName("HintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+
+        history_row = QHBoxLayout()
+        history_row.setSpacing(5)
+        history_title = QLabel("未完成任务来源")
+        history_title.setObjectName("HintLabel")
+        history_row.addWidget(history_title)
+        self.history_label = QLabel("最近有任务")
+        self.history_label.setStyleSheet(
+            f"color: {ACCENT_COLOR_HEX}; font-size: 12px; font-weight: 600;"
+        )
+        history_row.addWidget(self.history_label)
+        history_row.addStretch(1)
+        history_button_qss = (
+            "QPushButton {"
+            "  background-color: rgba(255,255,255,0.06);"
+            f"  color: {TEXT_COLOR_HEX};"
+            "  border: 1px solid rgba(255,255,255,0.12);"
+            "  border-radius: 4px;"
+            "  padding: 2px 7px;"
+            "  font-size: 11px;"
+            "  min-height: 0;"
+            "}"
+            "QPushButton:hover { background-color: rgba(255,255,255,0.14); }"
+        )
+        recent_btn = QPushButton("最近有任务")
+        recent_btn.setStyleSheet(history_button_qss)
+        recent_btn.setAutoDefault(False)
+        recent_btn.clicked.connect(self._select_latest_history_day)
+        history_row.addWidget(recent_btn)
+        for offset in (1, 2, 3):
+            quick_btn = QPushButton(f"{offset}天前")
+            quick_btn.setStyleSheet(history_button_qss)
+            quick_btn.setAutoDefault(False)
+            quick_btn.clicked.connect(
+                lambda _checked=False, days=offset: self._select_history_offset(days)
+            )
+            history_row.addWidget(quick_btn)
+        date_btn = QPushButton("选择日期…")
+        date_btn.setStyleSheet(history_button_qss)
+        date_btn.setAutoDefault(False)
+        date_btn.clicked.connect(self._select_history_custom_date)
+        history_row.addWidget(date_btn)
+        layout.addLayout(history_row)
 
         # Yesterday carry-over (only shown when there's data to carry).
         self.carryover_card = QFrame()
@@ -1013,16 +1122,75 @@ class HabitDialog(QDialog):
             lw.addItem(item)
         lw.blockSignals(False)
 
+    @staticmethod
+    def _date_days_ago(days: int) -> str:
+        return time.strftime(
+            "%Y-%m-%d",
+            time.localtime(time.time() - max(1, days) * 86400),
+        )
+
+    def _select_history_offset(self, days: int) -> None:
+        self._select_history_date(self._date_days_ago(days))
+
+    def _select_latest_history_day(self) -> None:
+        """Pick the nearest previous worksheet that contains tasks."""
+        today = AppState.today_str()
+        selected = self._date_days_ago(1)
+        try:
+            from shouyu.service.excel import KbExcel
+
+            excel = KbExcel()
+            for days in range(1, 31):
+                candidate = self._date_days_ago(days)
+                snapshot = _read_day_snapshot(candidate, excel)
+                if snapshot["total"] > 0:
+                    selected = candidate
+                    break
+        except Exception:
+            logging.exception("failed to find latest history day")
+        self._select_history_date(selected)
+        if selected == today:
+            self.history_label.setText("没有可用的历史日期")
+
+    def _select_history_custom_date(self) -> None:
+        default = self._selected_history_date or self._date_days_ago(1)
+        date_text, ok = QInputDialog.getText(
+            self,
+            "选择历史日期",
+            "请输入日期（YYYY-MM-DD）：",
+            text=default,
+        )
+        if not ok:
+            return
+        date_text = date_text.strip()
+        try:
+            time.strptime(date_text, "%Y-%m-%d")
+        except ValueError:
+            QMessageBox.warning(self, "日期格式错误", "请输入 YYYY-MM-DD 格式的日期。")
+            return
+        if date_text >= AppState.today_str():
+            QMessageBox.warning(self, "日期不可用", "只能选择今天之前的日期。")
+            return
+        self._select_history_date(date_text)
+
+    def _select_history_date(self, date_str: str) -> None:
+        self._selected_history_date = date_str
+        self._yesterday_marked_done_rows = set()
+        snapshot = _read_day_snapshot(date_str)
+        self._yesterday_unfinished = list(snapshot["unfinished"])
+        self._render_yesterday(snapshot)
+
     def _render_yesterday(self, snap: dict) -> None:
         # Cache the snapshot so `_refresh_carryover_visibility` can re-render
         # later without re-reading Excel.
         self._yesterday_snap = snap
+        self.history_label.setText(snap.get("date") or "未选择")
 
         # Glance label
         if snap["total"] > 0 or snap["pomodoros"] > 0:
             parts = []
             if snap["total"] > 0:
-                parts.append(f"昨日 {snap['done']}/{snap['total']} 完成")
+                parts.append(f"{snap['date']} {snap['done']}/{snap['total']} 完成")
             if snap["pomodoros"] > 0:
                 parts.append(f"🍅 {snap['pomodoros']}")
             self.yesterday_glance_label.setText("  ·  ".join(parts))
@@ -1062,7 +1230,9 @@ class HabitDialog(QDialog):
 
         header = QHBoxLayout()
         header.setSpacing(6)
-        header_label = QLabel(f"📅 昨日还有 {len(self._visible_yesterday)} 项未完成")
+        header_label = QLabel(
+            f"📅 {snap['date']} 还有 {len(self._visible_yesterday)} 项未完成"
+        )
         header_label.setStyleSheet(f"font-weight: 600; color: {TEXT_COLOR_HEX};")
         header.addWidget(header_label)
         header.addStretch(1)
@@ -1143,7 +1313,7 @@ class HabitDialog(QDialog):
 
             done_btn = QPushButton("✓ 已完成")
             done_btn.setToolTip(
-                "把昨天这条任务标记为「已完成」（保存后写回昨天的工作表）"
+                "把这条历史任务标记为「已完成」（保存后写回对应日期的工作表）"
             )
             done_btn.setAutoDefault(False)
             done_btn.setCursor(Qt.PointingHandCursor)
@@ -1158,7 +1328,7 @@ class HabitDialog(QDialog):
             # silently doing nothing.
             if not task.row:
                 done_btn.setEnabled(False)
-                done_btn.setToolTip("（无法定位到昨日工作表的对应行）")
+                done_btn.setToolTip("（无法定位到历史工作表的对应行）")
             row.addWidget(done_btn)
 
             self.carryover_layout.addLayout(row)
@@ -1449,9 +1619,11 @@ class HabitDialog(QDialog):
         self._update_stats()
         self._sync_pomodoro_task()
         if new_status == TaskStatus.DONE:
-            # Prompt is intentionally non-blocking-feeling: cancelling just
-            # skips the reflection, the DONE state is already committed.
-            self._prompt_reflection_for(index)
+            mode = Config.reflection_prompt_mode()
+            if mode == "dialog":
+                self._prompt_reflection_for(index)
+            elif mode == "toast":
+                self._show_reflection_toast(self._tasks[index])
 
     def _prompt_reflection_for(self, index: int) -> None:
         if not (0 <= index < len(self._tasks)):
@@ -1474,6 +1646,24 @@ class HabitDialog(QDialog):
         self._push_undo()
         task.reflection = new_reflection
         self._refresh_item(index)
+
+    def _show_reflection_toast(self, task: PlanTask) -> None:
+        if self._reflection_toast is None:
+            self._reflection_toast = ReflectionToast(
+                on_reflect=lambda: self._edit_reflection_for_task(task),
+                parent=self,
+            )
+        else:
+            self._reflection_toast.set_task(
+                task,
+                on_reflect=lambda: self._edit_reflection_for_task(task),
+            )
+        self._reflection_toast.show_for_task(task)
+
+    def _edit_reflection_for_task(self, task: PlanTask) -> None:
+        index = next((i for i, item in enumerate(self._tasks) if item is task), -1)
+        if index >= 0:
+            self._prompt_reflection_for(index)
 
     def _move(self, offset: int) -> None:
         index = self.list_widget.currentRow()
@@ -1532,15 +1722,20 @@ class HabitDialog(QDialog):
             in_progress_act = status_menu.addAction(
                 "▶  进行中", lambda: self._set_status(TaskStatus.IN_PROGRESS)
             )
+            suspended_act = status_menu.addAction(
+                "⏸  挂起", lambda: self._set_status(TaskStatus.SUSPENDED)
+            )
             done_act = status_menu.addAction(
-                "✓  已完成（写反思）", lambda: self._set_status(TaskStatus.DONE)
+                "✓  已完成", lambda: self._set_status(TaskStatus.DONE)
             )
             if task is not None:
                 pending_act.setCheckable(True)
                 in_progress_act.setCheckable(True)
+                suspended_act.setCheckable(True)
                 done_act.setCheckable(True)
                 pending_act.setChecked(task.status == TaskStatus.PENDING)
                 in_progress_act.setChecked(task.status == TaskStatus.IN_PROGRESS)
+                suspended_act.setChecked(task.status == TaskStatus.SUSPENDED)
                 done_act.setChecked(task.status == TaskStatus.DONE)
             if task is not None and task.status == TaskStatus.DONE:
                 menu.addAction("📝 编辑反思…", lambda: self._edit_reflection_for_selected())
@@ -1637,7 +1832,13 @@ class HabitDialog(QDialog):
         ]
         if not chosen:
             self._yesterday_unfinished = []
-            self._render_yesterday({"unfinished": [], "done": 0, "total": 0, "pomodoros": 0})
+            self._render_yesterday({
+                "date": self._selected_history_date,
+                "unfinished": [],
+                "done": 0,
+                "total": 0,
+                "pomodoros": 0,
+            })
             return
         existing_texts = {(t.text or "").strip() for t in self._tasks if (t.text or "").strip()}
         will_add = [
@@ -1662,7 +1863,13 @@ class HabitDialog(QDialog):
             existing_texts.add(text)
             added += 1
         self._yesterday_unfinished = []
-        self._render_yesterday({"unfinished": [], "done": 0, "total": 0, "pomodoros": 0})
+        self._render_yesterday({
+            "date": self._selected_history_date,
+            "unfinished": [],
+            "done": 0,
+            "total": 0,
+            "pomodoros": 0,
+        })
         self._render_tasks()
         if added > 0 and self._tasks:
             self.list_widget.setCurrentRow(len(self._tasks) - 1)
@@ -1956,6 +2163,7 @@ class HabitDialog(QDialog):
         total = len(self._tasks)
         done = sum(1 for t in self._tasks if t.status == TaskStatus.DONE)
         in_progress = sum(1 for t in self._tasks if t.status == TaskStatus.IN_PROGRESS)
+        suspended = sum(1 for t in self._tasks if t.status == TaskStatus.SUSPENDED)
         total_minutes = sum(t.duration_minutes for t in self._tasks if t.duration_minutes > 0)
         try:
             overload_threshold = Config.overload_threshold_minutes()
@@ -1980,6 +2188,8 @@ class HabitDialog(QDialog):
         parts = [f"今日 {done}/{total} 完成"]
         if in_progress:
             parts.append(f"{in_progress} 进行中")
+        if suspended:
+            parts.append(f"⏸ {suspended} 挂起")
         if p1_count:
             parts.append(f"🔴 {p1_count} 项 P1")
         # Only surface the work/life split once there's at least one life task;
@@ -2138,7 +2348,24 @@ class HabitDialog(QDialog):
         except Exception:
             logging.exception("failed to update ritual streak")
 
-        self._dispatch_save()
+        try:
+            self._dispatch_save()
+        except Exception:
+            logging.exception("failed to enqueue today's plan save")
+            self._closing = False
+            self._reset_action_buttons()
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                "保存失败",
+                "任务没有成功加入保存队列，请查看 kb.log 后重试。",
+                level=MessageType.ERROR,
+            )
+            return
+        # accept() triggers closeEvent; skip its second dispatch of the same
+        # snapshot. Duplicate queue entries were a major source of races
+        # after Ctrl+Enter.
+        self._skip_save_on_close = True
         QTimer.singleShot(0, self.accept)
 
     def _dispatch_save(self) -> None:
@@ -2152,6 +2379,7 @@ class HabitDialog(QDialog):
             tasks_snapshot,
             self._original_in_progress,
             yesterday_done_rows,
+            yesterday_date=self._selected_history_date,
             work_snapshot=self._clone_tasks(self._work_tasks),
             life_snapshot=self._clone_tasks(self._life_tasks),
         )
@@ -2248,7 +2476,11 @@ class HabitDialog(QDialog):
         unfinished = [
             t for t in self._tasks
             if (t.text or "").strip()
-            and t.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+            and t.status in (
+                TaskStatus.PENDING,
+                TaskStatus.IN_PROGRESS,
+                TaskStatus.SUSPENDED,
+            )
         ]
         if not unfinished:
             from shouyu.view.msgbox import MessageBox, MessageType
@@ -2280,5 +2512,76 @@ class HabitDialog(QDialog):
     def closeEvent(self, event) -> None:
         self._closing = True
         if not self._skip_save_on_close:
-            self._dispatch_save()
+            try:
+                self._dispatch_save()
+            except Exception:
+                logging.exception("failed to enqueue plan save while closing")
         event.accept()
+
+
+class ReflectionToast(QFrame):
+    """Small non-modal reflection reminder shown after a task is completed."""
+
+    def __init__(self, on_reflect, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._on_reflect = on_reflect
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "QFrame {"
+            "  background-color: #30343B;"
+            "  border: 1px solid #D9A441;"
+            "  border-radius: 8px;"
+            "}"
+            "QLabel { color: #F5F7FA; border: none; font-size: 12px; }"
+            "QPushButton {"
+            "  color: #FFFFFF;"
+            "  background-color: #8A641B;"
+            "  border: 1px solid #D9A441;"
+            "  border-radius: 5px;"
+            "  padding: 4px 8px;"
+            "  font-size: 12px;"
+            "}"
+            "QPushButton:hover { background-color: #A77B22; }"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 7, 8, 7)
+        layout.setSpacing(8)
+        self.label = QLabel("任务已完成")
+        self.label.setMaximumWidth(260)
+        layout.addWidget(self.label)
+        reflect_btn = QPushButton("记录反思")
+        reflect_btn.setAutoDefault(False)
+        reflect_btn.clicked.connect(self._reflect)
+        layout.addWidget(reflect_btn)
+        close_btn = QPushButton("×")
+        close_btn.setFixedWidth(24)
+        close_btn.setAutoDefault(False)
+        close_btn.clicked.connect(self.hide)
+        layout.addWidget(close_btn)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+
+    def set_task(self, task: PlanTask, on_reflect) -> None:
+        self._on_reflect = on_reflect
+        text = (task.text or "（未命名任务）").strip()
+        shown = text if len(text) <= 22 else text[:21] + "…"
+        self.label.setText(f"「{shown}」已完成")
+
+    def show_for_task(self, task: PlanTask) -> None:
+        self.set_task(task, self._on_reflect)
+        self.adjustSize()
+        parent = self.parentWidget()
+        if parent is not None:
+            self.move(
+                max(12, parent.width() - self.width() - 28),
+                max(12, parent.height() - self.height() - 28),
+            )
+        self.show()
+        self.raise_()
+        self._timer.start(15000)
+
+    def _reflect(self) -> None:
+        self.hide()
+        if callable(self._on_reflect):
+            self._on_reflect()

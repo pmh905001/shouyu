@@ -47,6 +47,19 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-09-30
+
+- **支持控制台 Ctrl+C 正常退出**：开发模式和打包模式的 watchdog 都会把 Ctrl+C 识别为用户主动退出，先停止子进程并清理退出标记，不再误判为崩溃后自动重启。（`main.py`、`shouyu/util/supervisor.py`）
+- **忽略运行时文件**：将 `kb.log`、`crash.log` 和 `shouyu_state.json` 纳入 `.gitignore`，避免本地日志、崩溃诊断和运行状态进入版本控制。（`.gitignore`）
+- **集中配置运行日志路径**：新增 `log_path` 和 `crash_log_path`，配置绝对路径后开发版与 dist 版统一写入指定的 `kb.log` / `crash.log`，不再使用 dist 目录下的日志；未配置时继续回退到程序目录。（`kb.ini`、`shouyu/config.py`、`shouyu/log.py`、`shouyu/util/crash.py`、`shouyu/util/supervisor.py`、`shouyu/view/tray.py`）
+- **增强崩溃诊断与自动恢复**：将 Qt 应用和窗口移回主线程，降低 Windows 下 Qt 对话框导致的进程级崩溃；增加父进程 watchdog，异常退出后自动重启并恢复已有番茄/任务状态；异常恢复时界面提示用户，并在 `kb.log`、`crash.log` 中记录 Python 与原生崩溃信息；圆球右键菜单新增错误日志入口；修复 Ctrl+Enter 保存后重复触发 closeEvent 导致同一任务重复入队的问题。（`main.py`、`shouyu/view/qt_app.py`、`shouyu/util/crash.py`、`shouyu/util/supervisor.py`、`shouyu/util/process.py`、`shouyu/view/tray.py`、`shouyu/view/pomodoro_window.py`、`shouyu/view/habit_dialog.py`）
+- **完成任务后的反思改为非阻塞提示**：默认不再弹出模态总结对话框，完成任务后显示可自动消失的提示，可点击「记录反思」再编辑；右键菜单继续保留反思入口，并通过 `reflection_prompt=off/toast/dialog` 支持关闭、非阻塞提示和旧弹窗三种模式。（`kb.ini`、`shouyu/config.py`、`shouyu/view/habit_dialog.py`）
+- **统一 SQLite 数据库位置**：新增 `sqlite_db_path` 配置；配置绝对路径时开发版和打包版共用指定的 `shouyu.db`，未配置时继续使用程序目录下的默认数据库；附件目录同步跟随数据库位置。（`kb.ini`、`shouyu/config.py`、`shouyu/service/message_queue.py`）
+- **新增任务「挂起」状态**：使用黄色琥珀色标识，贯穿 Excel 读写、任务列表展示、右键状态菜单、统计和未完成任务结转；挂起任务区别于普通待办，表示曾经开始但被更高优先级事项打断。（`shouyu/service/plan.py`、`shouyu/view/styles.py`、`shouyu/view/habit_dialog.py`）
+- **增加任务窗口最大化/还原控制**：右上角新增窗口状态按钮，最大化时占满可用屏幕，点击还原回到适合编辑的窗口大小，再次点击可恢复最大化。（`shouyu/view/habit_dialog.py`）
+- **支持历史日期未完成任务选择**：自动查找最近 30 天内最近一个有任务的日期，并提供 1/2/3 天前、最近有任务和自选日期入口；选中后可直接查看、结转或标记该日期的未完成任务，周末无任务时也能继续使用。（`shouyu/view/habit_dialog.py`、`shouyu/service/excel.py`）
+- **修复新增任务覆盖 other 区域**：计划列表扩展前自动为 `other` 区域插入空行，并同步移动其中的图片锚点，新增大量任务不会再覆盖剪贴板内容或导致任务读取错乱。（`shouyu/service/plan.py`）
+
 ## 2026-09-27
 
 - **恢复重启前的番茄与规划状态**：持久化当前阶段、结束时间、暂停剩余时间、任务和已完成番茄数；重启或主进程崩溃后优先恢复当天未结束的会话，不再重新开启规划或工作计时；状态文件采用原子替换，降低异常退出导致文件损坏的风险。（`main.py`、`shouyu/service/pomodoro.py`、`shouyu/util/state.py`）

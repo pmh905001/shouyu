@@ -32,6 +32,38 @@ class Config:
         return cls.get('excel_path', 'kb.xlsx')
 
     @classmethod
+    def sqlite_db_path(cls):
+        """Return the SQLite queue database path.
+
+        An absolute path in kb.ini is shared by development and packaged
+        runs. When omitted (or relative), preserve the original behavior:
+        place shouyu.db next to the active kb.ini / executable directory.
+        """
+        configured = str(cls.get('sqlite_db_path', '') or '').strip()
+        if configured and os.path.isabs(configured):
+            return os.path.abspath(configured)
+        return os.path.join(os.path.dirname(os.path.abspath(cls.FILE_NAME)), 'shouyu.db')
+
+    @classmethod
+    def log_path(cls):
+        """Return the application log path, defaulting beside kb.ini."""
+        configured = str(cls.get('log_path', '') or '').strip()
+        if configured and os.path.isabs(configured):
+            return os.path.abspath(configured)
+        return os.path.join(os.path.dirname(os.path.abspath(cls.FILE_NAME)), 'kb.log')
+
+    @classmethod
+    def crash_log_path(cls):
+        """Return the native-crash log path, defaulting beside kb.ini."""
+        configured = str(cls.get('crash_log_path', '') or '').strip()
+        if configured and os.path.isabs(configured):
+            return os.path.abspath(configured)
+        return os.path.join(
+            os.path.dirname(os.path.abspath(cls.FILE_NAME)),
+            'crash.log',
+        )
+
+    @classmethod
     def max_backups(cls):
         return int(cls.get('max_backups', '100'))
 
@@ -56,6 +88,12 @@ class Config:
         another program) must sit pending before the background dispatcher
         surfaces a toast about it. Default: 30."""
         return int(cls.get('stuck_alert_minutes', '30'))
+
+    @classmethod
+    def reflection_prompt_mode(cls):
+        """How completing a task should offer a reflection entry point."""
+        mode = str(cls.get('reflection_prompt', 'toast') or 'toast').strip().lower()
+        return mode if mode in ('off', 'toast', 'dialog') else 'toast'
 
     @classmethod
     def habits(cls):

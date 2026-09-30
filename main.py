@@ -5,8 +5,6 @@ import socketserver
 import sys
 import threading
 
-import keyboard
-
 from shouyu.action.shortcut import Shortcut
 from shouyu.config import Config
 from shouyu.log import Log
@@ -15,6 +13,7 @@ from shouyu.service.excel import KbExcel
 from shouyu.util.package import Package
 from shouyu.util.process import ProcessManager
 from shouyu.util.state import AppState
+from shouyu.util import crash, supervisor
 from shouyu.view.msgbox import MessageBox, MessageType
 from shouyu.view.qt_app import QtApp
 from shouyu.view.tray import Tray
@@ -92,6 +91,25 @@ def _alert_if_excel_was_recovered():
             QtApp.show_backup_restore(excel.recovered_from_backup)
     except Exception:
         logging.exception("failed to check Excel recovery status")
+
+
+def _show_crash_notice():
+    notice = AppState.get("crash_notice")
+    if not isinstance(notice, dict):
+        return
+    AppState.delete("crash_notice")
+    message = (
+        f"检测到 shouyu 在 {notice.get('time', '刚才')} 异常退出，"
+        f"已自动重启（退出码：{notice.get('exit_code', '未知')}）。"
+    )
+    logging.error(
+        "previous worker crashed at %s with code %s; logs: %s / %s",
+        notice.get("time"),
+        notice.get("exit_code"),
+        notice.get("log_path"),
+        notice.get("crash_log_path"),
+    )
+    QtApp.show_crash_notice(message)
 
 
 def _start_pomodoro_if_enabled():
@@ -232,26 +250,34 @@ def _run_daemon():
 
     # 在 Qt 就绪后弹出当日习惯提醒；如果开启了番茄工作法也一并启动。
     # 启动健康检查放在最前 — 如果主 Excel 损坏，先让用户决定如何恢复。
+    threading.Timer(0.2, _show_crash_notice).start()
     threading.Timer(0.5, _alert_if_excel_was_recovered).start()
     threading.Timer(1.0, _show_habit_dialog_if_needed).start()
     threading.Timer(2.0, _start_pomodoro_if_enabled).start()
 
-    keyboard.wait()
+    # Qt owns the process main thread. Global keyboard hooks and the tray
+    # continue on their own worker threads.
+    try:
+        QtApp.exec()
+    except KeyboardInterrupt:
+        logging.info("Ctrl+C received; shutting down shouyu normally")
+        ProcessManager.mark_shutdown_requested()
 
 
 if __name__ == '__main__':
     Package.set_cwd()
     Log.setup()
+    crash.install()
 
-    # CLI mode: any positional arg means "add this as a new row, then exit".
-    # Triggered by Win+R / cmd: `shouyu 我的任务`. Must run BEFORE any
-    # daemon-side init (especially kill_old_process) so we don't disturb
-    # the long-running shouyu.exe instance.
-    cli_args = [a for a in sys.argv[1:] if a.strip()]
-    if cli_args and cli_args[0] == '--show-queue':
-        sys.exit(_show_queue_dump())
-    if cli_args:
-        title = " ".join(cli_args).strip()
-        sys.exit(_cli_add_title(title) if title else 0)
-
-    _run_daemon()
+    if '--shouyu-child' in sys.argv[1:]:
+        _run_daemon()
+    else:
+        # CLI mode: positional args add a title and exit without starting the
+        # supervisor. This must remain independent of the long-running daemon.
+        cli_args = [a for a in sys.argv[1:] if a.strip()]
+        if cli_args and cli_args[0] == '--show-queue':
+            sys.exit(_show_queue_dump())
+        if cli_args:
+            title = " ".join(cli_args).strip()
+            sys.exit(_cli_add_title(title) if title else 0)
+        sys.exit(supervisor.run())

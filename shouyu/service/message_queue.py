@@ -52,12 +52,15 @@ _BUSY_TIMEOUT_MS = 5000
 
 
 def _db_path() -> str:
+    configured = Config.sqlite_db_path()
+    if configured:
+        return configured
     base_dir = os.path.dirname(os.path.abspath(Config.FILE_NAME)) or '.'
     return os.path.join(base_dir, DB_FILE_NAME)
 
 
 def _attachments_root() -> str:
-    base_dir = os.path.dirname(os.path.abspath(Config.FILE_NAME)) or '.'
+    base_dir = os.path.dirname(_db_path()) or '.'
     return os.path.join(base_dir, 'attachments')
 
 

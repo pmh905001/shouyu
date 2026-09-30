@@ -149,6 +149,12 @@ class ProcessManager:
             f.write(f'{current_pid}')
 
     @staticmethod
+    def mark_shutdown_requested():
+        from shouyu.util.supervisor import mark_shutdown_requested
+
+        mark_shutdown_requested()
+
+    @staticmethod
     def retart_myself():
         python = sys.executable
         os.execl(python, python, *sys.argv)

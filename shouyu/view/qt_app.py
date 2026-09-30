@@ -24,6 +24,7 @@ class _QtBridge(QObject):
     toggle_pomodoro_window_signal = Signal()
     show_backup_signal = Signal(str)  # payload = path of auto-recovered backup, or ""
     save_status_signal = Signal(str, str, str)  # (level, title, message)
+    crash_notice_signal = Signal(str)
     ocr_capture_signal = Signal(str)  # payload = target column, or ""
     quit_signal = Signal()
 
@@ -110,6 +111,23 @@ class _QtBridge(QObject):
             logging.exception("failed to display save status message")
 
     @Slot(str)
+    def _on_crash_notice(self, message: str) -> None:
+        try:
+            box = QMessageBox()
+            box.setWindowTitle("授渔已自动恢复")
+            box.setIcon(QMessageBox.Warning)
+            box.setText(message)
+            box.setInformativeText("请右键小圆球选择“查看错误日志”，方便后续定位问题。")
+            box.setStandardButtons(QMessageBox.Ok)
+            box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            box.show()
+            box.raise_()
+            box.activateWindow()
+            self._crash_notice_box = box
+        except Exception:
+            logging.exception("failed to display crash recovery notice")
+
+    @Slot(str)
     def _on_ocr_capture(self, column: str) -> None:
         """Show the fullscreen region-selector (blocking, must run on this
         thread), then hand the cropped image off to a plain background
@@ -152,7 +170,10 @@ class QtApp:
         if cls._started:
             return
         cls._started = True
-        threading.Thread(target=cls._main, name="qt-app", daemon=True).start()
+        # QApplication and all Qt widgets must live on the process main
+        # thread on Windows. Running the event loop in a daemon thread made
+        # dialogs such as HabitDialog prone to process-level Qt crashes.
+        cls._main()
         cls._ready.wait(timeout=10)
 
     @classmethod
@@ -171,10 +192,17 @@ class QtApp:
             )
             cls._bridge.show_backup_signal.connect(cls._bridge._on_show_backup, Qt.QueuedConnection)
             cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
+            cls._bridge.crash_notice_signal.connect(cls._bridge._on_crash_notice, Qt.QueuedConnection)
             cls._bridge.ocr_capture_signal.connect(cls._bridge._on_ocr_capture, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
         finally:
             cls._ready.set()
+
+    @classmethod
+    def exec(cls) -> None:
+        if cls._app is None:
+            logging.warning("Qt app not initialized; cannot enter event loop")
+            return
         cls._app.exec()
 
     @classmethod
@@ -243,6 +271,13 @@ class QtApp:
             logging.warning("Qt bridge not ready; cannot show save status")
             return
         cls._bridge.save_status_signal.emit(level or 'info', title or "", message or "")
+
+    @classmethod
+    def show_crash_notice(cls, message: str) -> None:
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot show crash notice")
+            return
+        cls._bridge.crash_notice_signal.emit(message)
 
     @classmethod
     def request_ocr_capture(cls, column: Optional[str] = None) -> None:

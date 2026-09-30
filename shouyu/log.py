@@ -1,4 +1,7 @@
 import logging
+import os
+
+from shouyu.config import Config
 
 
 class Log:
@@ -6,9 +9,11 @@ class Log:
 
     @classmethod
     def setup(cls):
+        path = Config.log_path()
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
         logging.basicConfig(
             level=logging.INFO,
-            filename='kb.log',
+            filename=path,
             format=cls.FORMAT,
             datefmt="%Y-%m-%d %H:%M:%S"
         )

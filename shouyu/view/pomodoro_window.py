@@ -738,6 +738,10 @@ class PomodoroWindow(QWidget):
         backup_action.triggered.connect(self._on_restore_backup)
         queue_action = menu.addAction("查看待同步队列")
         queue_action.triggered.connect(self._on_show_queue)
+        log_action = menu.addAction("查看错误日志")
+        log_action.triggered.connect(self._on_show_log)
+        crash_log_action = menu.addAction("查看崩溃诊断日志")
+        crash_log_action.triggered.connect(self._on_show_crash_log)
         startup_action = menu.addAction("开机启动")
         startup_action.setCheckable(True)
         from shouyu.util.reg import Registry
@@ -797,6 +801,18 @@ class PomodoroWindow(QWidget):
         from shouyu.view.tray import Tray
 
         Tray.on_show_queue(None, None)
+
+    @staticmethod
+    def _on_show_log() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_show_log(None, None)
+
+    @staticmethod
+    def _on_show_crash_log() -> None:
+        from shouyu.view.tray import Tray
+
+        Tray.on_show_crash_log(None, None)
 
     @staticmethod
     def _on_toggle_startup() -> None:
