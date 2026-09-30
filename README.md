@@ -49,7 +49,6 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-09-30
 
-- **支持控制台 Ctrl+C 正常退出**：开发模式和打包模式的 watchdog 都会把 Ctrl+C 识别为用户主动退出，先停止子进程并清理退出标记，不再误判为崩溃后自动重启。（`main.py`、`shouyu/util/supervisor.py`）
 - **忽略运行时文件**：将 `kb.log`、`crash.log` 和 `shouyu_state.json` 纳入 `.gitignore`，避免本地日志、崩溃诊断和运行状态进入版本控制。（`.gitignore`）
 - **集中配置运行日志路径**：新增 `log_path` 和 `crash_log_path`，配置绝对路径后开发版与 dist 版统一写入指定的 `kb.log` / `crash.log`，不再使用 dist 目录下的日志；未配置时继续回退到程序目录。（`kb.ini`、`shouyu/config.py`、`shouyu/log.py`、`shouyu/util/crash.py`、`shouyu/util/supervisor.py`、`shouyu/view/tray.py`）
 - **增强崩溃诊断与自动恢复**：将 Qt 应用和窗口移回主线程，降低 Windows 下 Qt 对话框导致的进程级崩溃；增加父进程 watchdog，异常退出后自动重启并恢复已有番茄/任务状态；异常恢复时界面提示用户，并在 `kb.log`、`crash.log` 中记录 Python 与原生崩溃信息；圆球右键菜单新增错误日志入口；修复 Ctrl+Enter 保存后重复触发 closeEvent 导致同一任务重复入队的问题。（`main.py`、`shouyu/view/qt_app.py`、`shouyu/util/crash.py`、`shouyu/util/supervisor.py`、`shouyu/util/process.py`、`shouyu/view/tray.py`、`shouyu/view/pomodoro_window.py`、`shouyu/view/habit_dialog.py`）

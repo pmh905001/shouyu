@@ -47,17 +47,6 @@ def run() -> int:
         try:
             child = subprocess.Popen(command)
             code = child.wait()
-        except KeyboardInterrupt:
-            logging.info("Ctrl+C received by supervisor; stopping worker normally")
-            mark_shutdown_requested()
-            try:
-                if child is not None and child.poll() is None:
-                    child.terminate()
-                    child.wait(timeout=5)
-            except Exception:
-                logging.exception("failed to stop worker after Ctrl+C")
-            _clear_shutdown_marker()
-            return 0
         except Exception:
             logging.exception("supervisor failed to start or wait for worker")
             return 1

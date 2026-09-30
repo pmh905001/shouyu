@@ -257,11 +257,7 @@ def _run_daemon():
 
     # Qt owns the process main thread. Global keyboard hooks and the tray
     # continue on their own worker threads.
-    try:
-        QtApp.exec()
-    except KeyboardInterrupt:
-        logging.info("Ctrl+C received; shutting down shouyu normally")
-        ProcessManager.mark_shutdown_requested()
+    QtApp.exec()
 
 
 if __name__ == '__main__':
