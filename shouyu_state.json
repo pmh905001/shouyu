@@ -1,7 +1,7 @@
 {
   "last_habit_shown_date": "2026-09-30",
-  "last_ritual_date": "2026-09-30",
-  "streak_days": 1,
+  "last_ritual_date": "2026-10-01",
+  "streak_days": 2,
   "pomodoro_mode": "deep",
   "last_planning_date": "2026-09-30",
   "focus_drifts:2026-07-12": 6,
@@ -13,13 +13,14 @@
   "focus_drifts:2026-09-24": 1,
   "focus_drifts:2026-09-27": 1,
   "pomodoro_session": {
-    "date": "2026-09-30",
+    "date": "2026-10-01",
     "phase": "working",
     "phase_before_pause": null,
-    "end_time": 1790783587.6510758,
+    "end_time": 1790786635.9237144,
     "remaining_when_paused": 0.0,
-    "completed_today": 1,
-    "task": "shouyu： 容易崩溃",
-    "task_started_at": 1790780588.016526
-  }
+    "completed_today": 2,
+    "task": "",
+    "task_started_at": 1790783636.2331579
+  },
+  "breaks_skipped:2026-09-30": 1
 }

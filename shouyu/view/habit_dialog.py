@@ -52,7 +52,6 @@ from shouyu.view.duration_dialog import DurationPickerDialog
 
 from shouyu.config import Config
 from shouyu.service.plan import (
-    DEFAULT_PLAN_TASKS,
     PlanTask,
     TaskCategory,
     TaskPriority,
@@ -431,9 +430,6 @@ class HabitDialog(QDialog):
         except Exception:
             logging.exception("failed to read plan from Excel")
             tasks = []
-
-        if not tasks:
-            tasks = [PlanTask(text=t, status=TaskStatus.PENDING) for t in DEFAULT_PLAN_TASKS]
 
         self._tasks = tasks
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)

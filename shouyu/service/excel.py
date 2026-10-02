@@ -149,6 +149,8 @@ class KbExcel:
             self._workbook.active = worksheet
         else:
             worksheet: Worksheet = self._workbook.get_sheet_by_name(self._worksheet_name)
+            if PlanService(worksheet).remove_legacy_default_tasks():
+                self._changed = True
             self._workbook.active = worksheet
 
         # Must run *after* today's tab is ensured above: create_sheet()

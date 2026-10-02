@@ -41,7 +41,6 @@ from PySide6.QtWidgets import (
 
 from shouyu.config import Config
 from shouyu.service.plan import (
-    DEFAULT_PLAN_TASKS,
     PlanTask,
     TaskPriority,
     TaskStatus,
@@ -165,9 +164,6 @@ class TodoPanel(QWidget):
         except Exception:
             logging.exception("failed to read plan from Excel")
             tasks = []
-
-        if not tasks:
-            tasks = [PlanTask(text=t, status=TaskStatus.PENDING) for t in DEFAULT_PLAN_TASKS]
 
         self._tasks = tasks
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)

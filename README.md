@@ -47,6 +47,10 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-10-02
+
+- **计划默认保持为空**：新建每日工作表只创建 `plan` 主任务，不再自动加入 `task 1`、`task 2`、`task 3`；打开旧数据时会安全清理末尾的历史默认占位任务。（`shouyu/service/plan.py`、`shouyu/service/excel.py`、`shouyu/view/habit_dialog.py`、`shouyu/view/todo_panel.py`）
+
 ## 2026-09-30
 
 - **忽略运行时文件**：将 `kb.log`、`crash.log` 和 `shouyu_state.json` 纳入 `.gitignore`，避免本地日志、崩溃诊断和运行状态进入版本控制。（`.gitignore`）
