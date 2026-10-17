@@ -47,6 +47,18 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-10-17
+
+- **修复「番茄: 显示」无响应、无法隐藏**：托盘里的「番茄: 显示」原先只会显示（小球已可见时点击无变化）；现改为「番茄: 显示/隐藏」切换，与快捷键 ctrl+alt+t 行为一致。小球右键菜单中的同名项已移除，隐藏请使用「隐藏（ctrl+alt+t）」。（`shouyu/view/tray.py`、`shouyu/view/pomodoro_window.py`）
+- **托盘菜单新增「番茄: 暂停/继续」**：位于「番茄: 启停」之后；番茄进行中点击暂停，暂停中点击继续，空闲时不做任何事（开始请用「番茄: 启停」）。（`shouyu/view/tray.py`）
+- **完成任务提示不再遮挡底部按钮**：「任务已完成」反思提示原先固定在窗口右下角，会压住「开始今天」按钮；现改为锚定在任务列表右下角、底部按钮行上方。（`shouyu/view/habit_dialog.py`）
+- **习惯窗口恢复 Win+↑ / Win+↓ 最大化还原**：无边框窗口缺少系统最大化所需的样式位，Win+↑ 无效。现补回标题栏/边框样式，并通过 `WM_NCCALCSIZE` 隐藏边框与标题栏（外观仍为无边框）；系统触发的最大化/还原会同步「还原 / 最大化」按钮状态。（`shouyu/view/habit_dialog.py`）
+- **加固今日任务窗口的列表重建（降低原生崩溃风险）**：`crash.log` 中的 access violation 全部发生在对话框重建列表（`clear()` / `addItem()`）时，原因尚未在本地复现。现在快捷键（Alt+↑↓、Ctrl++ / Ctrl+−、Ctrl+Z / Ctrl+Y、Ctrl+P、Ctrl+Enter）、右键菜单、重新加载和 Backlog 重绘之前，都会先提交并关闭仍打开的行内编辑器；`itemChanged` 回调中的重绘改为延后执行，避免在编辑器提交过程中释放列表项。（`shouyu/view/habit_dialog.py`）
+- **修复编辑未结束时按 Alt+↑ 丢失文字**：行内编辑还没确认就按快捷键，输入的内容会被丢弃；现在会先提交再移动、新增或删除任务。（`shouyu/view/habit_dialog.py`）
+- **崩溃日志加时间戳并汇总到 kb.log**：`crash.log` 中每次启动（区分 supervisor / worker）和每次崩溃都带时间戳，崩溃头包含退出码与运行时长；崩溃转储同时写入 `kb.log`，`kb.log` 成为统一入口。（`shouyu/util/crash.py`、`shouyu/util/supervisor.py`）
+- **修复「查看错误日志」「查看崩溃诊断日志」无响应**：`.log` 在很多 Windows 上没有默认关联程序，原先通过 shell 打开会静默失败；现改为直接用 `notepad.exe` 打开，崩溃日志不存在时会自动创建。（`shouyu/util/process.py`、`shouyu/view/tray.py`）
+- **托盘新增「打开工作目录」**：在资源管理器中打开 shouyu 工作目录（`kb.ini`、`kb.log`、`crash.log` 所在目录）。（`shouyu/view/tray.py`、`shouyu/config.py`、`shouyu/util/process.py`）
+
 ## 2026-10-02
 
 - **计划默认保持为空**：新建每日工作表只创建 `plan` 主任务，不再自动加入 `task 1`、`task 2`、`task 3`；打开旧数据时会安全清理末尾的历史默认占位任务。（`shouyu/service/plan.py`、`shouyu/service/excel.py`、`shouyu/view/habit_dialog.py`、`shouyu/view/todo_panel.py`）

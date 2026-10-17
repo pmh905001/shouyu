@@ -64,6 +64,12 @@ class Config:
         )
 
     @classmethod
+    def work_dir(cls):
+        """Return the shouyu working directory (the folder holding kb.ini,
+        and by default kb.log / crash.log / shouyu.db)."""
+        return os.path.dirname(os.path.abspath(cls.FILE_NAME))
+
+    @classmethod
     def max_backups(cls):
         return int(cls.get('max_backups', '100'))
 

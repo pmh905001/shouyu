@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from types import TracebackType
 from typing import Optional, Type
 
@@ -15,8 +16,18 @@ from shouyu.config import Config
 _fault_log = None
 
 
+def _timestamp() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def install() -> None:
-    """Install traceback and native-crash diagnostics once per process."""
+    """Install traceback and native-crash diagnostics once per process.
+
+    faulthandler writes the native dump straight into crash.log without any
+    timestamp, so every worker start writes a timestamped marker first. The
+    parent supervisor adds a timestamped header in front of each crash dump
+    (see shouyu/util/supervisor.py).
+    """
     global _fault_log
     if _fault_log is not None:
         return
@@ -26,7 +37,11 @@ def install() -> None:
         os.makedirs(os.path.dirname(crash_path) or ".", exist_ok=True)
         _fault_log = open(crash_path, "a", encoding="utf-8", buffering=1)
         faulthandler.enable(file=_fault_log, all_threads=True)
-        _fault_log.write("\n--- crash diagnostics enabled ---\n")
+        role = "worker" if "--shouyu-child" in sys.argv[1:] else "supervisor"
+        _fault_log.write(
+            f"\n=== [{_timestamp()}] crash diagnostics enabled "
+            f"({role}, pid={os.getpid()}) ===\n"
+        )
     except Exception:
         logging.exception("failed to enable faulthandler")
 

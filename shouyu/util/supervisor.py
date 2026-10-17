@@ -42,6 +42,9 @@ def run() -> int:
     while True:
         command = _child_command()
         started_at = time.time()
+        # faulthandler appends to crash.log only while this worker runs, so
+        # everything past this offset belongs to this worker session.
+        crash_offset = _crash_log_size()
         logging.info("starting supervised worker: %s", command)
         child = None
         try:
@@ -70,6 +73,7 @@ def run() -> int:
             code,
             now - started_at,
         )
+        _archive_native_crash(crash_offset, code, now - started_at, now)
         _record_crash_notice(code)
         if len(restarts) > MAX_RESTARTS_IN_WINDOW:
             logging.critical(
@@ -106,6 +110,50 @@ def _pid_file_belongs_to_another_process(child_pid: int) -> bool:
     except OSError:
         logging.exception("failed to inspect pid.txt after worker exit")
         return False
+
+
+def _crash_log_size() -> int:
+    try:
+        return os.path.getsize(Config.crash_log_path())
+    except OSError:
+        return 0
+
+
+def _archive_native_crash(offset: int, code: int, runtime: float, when: float) -> None:
+    """Timestamp this worker's native crash dump and mirror it into kb.log.
+
+    faulthandler writes its dump to crash.log with no timestamp. The supervisor
+    knows exactly when the worker died, so it prepends a timestamped header to
+    the slice of crash.log written by that worker, and logs the same dump into
+    kb.log, which is the single entry point for all logs.
+    """
+    path = Config.crash_log_path()
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(when))
+    header = (
+        f"\n=== [{stamp}] worker crashed: exit code {code} "
+        f"(0x{code & 0xFFFFFFFF:08X}), runtime {runtime:.1f}s ===\n"
+    )
+    try:
+        with open(path, "r+b") as f:
+            f.seek(0, os.SEEK_END)
+            start = min(offset, f.tell())  # file may have been truncated meanwhile
+            f.seek(start)
+            raw = f.read()
+            # Keep this worker's "enabled" marker first, then the crash header,
+            # then the faulthandler dump itself.
+            marker = raw.find(b"crash diagnostics enabled")
+            split = raw.find(b"\n", marker) + 1 if marker >= 0 else 0
+            stamped = raw[:split] + header.encode("utf-8") + raw[split:]
+            f.seek(start)
+            f.write(stamped)
+    except OSError:
+        logging.exception("failed to timestamp native crash dump in %s", path)
+        return
+    logging.critical(
+        "native crash dump (also stamped in %s):\n%s",
+        path,
+        stamped.decode("utf-8", errors="replace").strip() or "<no faulthandler output>",
+    )
 
 
 def _record_crash_notice(code: int) -> None:

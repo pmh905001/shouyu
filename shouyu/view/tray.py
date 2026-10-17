@@ -34,9 +34,11 @@ class Tray:
         menu = (
             MenuItem(text='帮助', action=cls.on_help),
             MenuItem(text='设置', action=cls.on_config),
+            MenuItem(text='打开工作目录', action=cls.on_open_work_dir),
             MenuItem(text='今日任务', action=cls.on_show_todo),
             MenuItem(text='番茄: 启停', action=cls.on_toggle_pomodoro),
-            MenuItem(text='番茄: 显示', action=cls.on_show_pomodoro),
+            MenuItem(text='番茄: 暂停/继续', action=cls.on_pause_resume_pomodoro),
+            MenuItem(text='番茄: 显示/隐藏', action=cls.on_toggle_pomodoro_visible),
             MenuItem(text='从备份恢复…', action=cls.on_restore_backup),
             MenuItem(text='查看待同步队列', action=cls.on_show_queue),
             MenuItem(text='查看错误日志', action=cls.on_show_log),
@@ -78,6 +80,10 @@ class Tray:
         ProcessManager.open_file(Config.FILE_NAME)
 
     @classmethod
+    def on_open_work_dir(cls, icon, item):
+        ProcessManager.open_folder(Config.work_dir())
+
+    @classmethod
     def on_show_todo(cls, icon, item):
         from shouyu.view.qt_app import QtApp
 
@@ -100,10 +106,28 @@ class Tray:
         PomodoroService.instance().toggle()
 
     @classmethod
-    def on_show_pomodoro(cls, icon, item):
+    def on_pause_resume_pomodoro(cls, icon, item):
+        """Pause a running cycle, or resume a paused one. Idle is a no-op
+        (use 番茄: 启停 to start). Mirrors the state handling in
+        PomodoroService.toggle() without the start branch."""
+        from shouyu.service.pomodoro import PomodoroService
+
+        service = PomodoroService.instance()
+        phase = service.snapshot().get('phase')
+        if phase == 'idle':
+            logging.info('pomodoro is idle; nothing to pause or resume')
+        elif phase == 'paused':
+            service.resume()
+        else:
+            service.pause()
+
+    @classmethod
+    def on_toggle_pomodoro_visible(cls, icon, item):
+        """Show the floating ball if hidden, hide it if visible. Same action
+        as the show/hide hotkey (ctrl+alt+t)."""
         from shouyu.view.qt_app import QtApp
 
-        QtApp.show_pomodoro_window()
+        QtApp.toggle_pomodoro_window()
 
     @classmethod
     def on_restore_backup(cls, icon, item):
@@ -129,15 +153,24 @@ class Tray:
     @classmethod
     def on_show_log(cls, icon, item):
         path = Config.log_path()
-        ProcessManager.open_file(path)
+        if not os.path.exists(path):
+            logging.info('error log does not exist yet: %s', path)
+            return
+        ProcessManager.open_log(path)
 
     @classmethod
     def on_show_crash_log(cls, icon, item):
         path = Config.crash_log_path()
-        if os.path.exists(path):
-            ProcessManager.open_file(path)
-        else:
-            logging.info('crash diagnostics log does not exist yet: %s', path)
+        if not os.path.exists(path):
+            # Nothing has crashed yet; create the file so the menu still opens
+            # something useful instead of silently doing nothing.
+            try:
+                os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+                open(path, 'a', encoding='utf-8').close()
+            except OSError:
+                logging.exception('failed to create crash diagnostics log: %s', path)
+                return
+        ProcessManager.open_log(path)
 
     @classmethod
     def display_checked(cls, icon):

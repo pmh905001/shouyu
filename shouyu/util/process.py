@@ -129,6 +129,30 @@ class ProcessManager:
         ).start()
 
     @staticmethod
+    def open_log(path: str) -> None:
+        """Open a plain-text log (kb.log / crash.log) in Notepad.
+
+        `open_file` relies on the shell file association, and `.log` has no
+        default association on many Windows installs, so it silently did
+        nothing. Launch notepad.exe directly instead (always present on
+        Windows) with no shell and no pipes.
+        """
+        path = os.path.abspath(path)
+        try:
+            subprocess.Popen(['notepad.exe', path])
+        except OSError:
+            logging.exception(f'failed to open log file: {path}')
+
+    @staticmethod
+    def open_folder(path: str) -> None:
+        """Open a directory in Windows Explorer."""
+        path = os.path.abspath(path)
+        try:
+            subprocess.Popen(['explorer.exe', path])
+        except OSError:
+            logging.exception(f'failed to open folder: {path}')
+
+    @staticmethod
     def kill_old_process():
         file_name = 'pid.txt'
         current_pid = psutil.Process().pid

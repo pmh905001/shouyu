@@ -20,12 +20,15 @@ the footer hint.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import logging
 import re
+import sys
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -37,6 +40,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -96,6 +100,34 @@ _CATEGORY_BADGE = {
 }
 
 _TASK_ROLE = Qt.UserRole + 1
+
+# Win32 constants used to give the frameless dialog native snap / maximize
+# behaviour (Win+Up / Win+Down) without bringing back the window frame.
+_GWL_STYLE = -16
+_WS_CAPTION = 0x00C00000
+_WS_THICKFRAME = 0x00040000
+_WS_MINIMIZEBOX = 0x00020000
+_WS_MAXIMIZEBOX = 0x00010000
+_WM_NCCALCSIZE = 0x0083
+_MONITOR_DEFAULTTONEAREST = 2
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOZORDER = 0x0004
+_SWP_NOACTIVATE = 0x0010
+_SWP_FRAMECHANGED = 0x0020
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+    ]
+
+
+class _NCCALCSIZE_PARAMS(ctypes.Structure):
+    _fields_ = [("rgrc", ctypes.wintypes.RECT * 3), ("lppos", ctypes.c_void_p)]
 
 
 def _days_since(created_date: str) -> int:
@@ -369,6 +401,7 @@ class HabitDialog(QDialog):
         self._closing = False
         self._window_maximized = True
         self._normal_geometry: Optional[QRect] = None
+        self._native_snap_enabled = False
         # Snapshot of the plan state right after the last load from Excel.
         # Used by `_has_unsaved_changes` so Esc / 关闭 can warn the user before
         # silently dropping their edits.
@@ -410,6 +443,8 @@ class HabitDialog(QDialog):
         # Guard so undo/redo themselves don't recursively push onto their own
         # stacks while mutating _tasks.
         self._in_undo_redo = False
+        # Re-entrancy guard for _close_inline_editors().
+        self._closing_editor = False
 
         self._build_ui()
         self._install_shortcuts()
@@ -423,6 +458,9 @@ class HabitDialog(QDialog):
     def refresh_plan_from_excel(self) -> None:
         from shouyu.service.excel import KbExcel
 
+        # Commit any half-typed edit into the *current* lists before they are
+        # replaced below; otherwise it would land on the wrong reloaded row.
+        self._close_inline_editors()
         excel = None
         try:
             excel = KbExcel()
@@ -500,16 +538,83 @@ class HabitDialog(QDialog):
             self.window_state_btn.setText("□ 最大化")
             self.window_state_btn.setToolTip("最大化窗口")
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._enable_native_snap_styles()
+
+    def _enable_native_snap_styles(self) -> None:
+        """Let Win+↑ / Win+↓ maximize and restore this frameless dialog.
+
+        Qt's FramelessWindowHint creates a WS_POPUP window without
+        WS_THICKFRAME or WS_MAXIMIZEBOX, and the Windows shell ignores Win+↑
+        for such windows. Adding those style bits back makes the shortcut work;
+        nativeEvent() then answers WM_NCCALCSIZE so the window still has no
+        visible frame or caption. Must run after the native window exists.
+        """
+        if sys.platform != "win32" or self._native_snap_enabled:
+            return
+        hwnd = int(self.winId())
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, _GWL_STYLE)
+        # WS_CAPTION is needed as well: the shell's Win+↑ ignores caption-less
+        # windows. The caption is never painted because nativeEvent() reports
+        # the whole window as client area.
+        user32.SetWindowLongW(
+            hwnd,
+            _GWL_STYLE,
+            style | _WS_CAPTION | _WS_THICKFRAME | _WS_MAXIMIZEBOX | _WS_MINIMIZEBOX,
+        )
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_FRAMECHANGED | _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_NOACTIVATE,
+        )
+        self._native_snap_enabled = True
+
+    def nativeEvent(self, eventType, message):
+        if self._native_snap_enabled and bytes(eventType) == b"windows_generic_MSG":
+            try:
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+                if msg.message == _WM_NCCALCSIZE and msg.wParam:
+                    # The whole window is client area (no border / caption).
+                    # When maximized, Windows would extend it past the taskbar,
+                    # so clamp the client rect to the monitor's work area.
+                    user32 = ctypes.windll.user32
+                    if user32.IsZoomed(msg.hWnd):
+                        monitor = user32.MonitorFromWindow(msg.hWnd, _MONITOR_DEFAULTTONEAREST)
+                        info = _MONITORINFO()
+                        info.cbSize = ctypes.sizeof(_MONITORINFO)
+                        user32.GetMonitorInfoW(monitor, ctypes.byref(info))
+                        params = _NCCALCSIZE_PARAMS.from_address(msg.lParam)
+                        params.rgrc[0] = info.rcWork
+                    return True, 0
+            except Exception:
+                logging.exception("failed to handle WM_NCCALCSIZE for habit dialog")
+        return super().nativeEvent(eventType, message)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            # Win+↑ / Win+↓ change the native state without going through the
+            # title-bar button, so keep the button and the flag in sync.
+            maximized = self.isMaximized()
+            if maximized and not self._window_maximized:
+                self._normal_geometry = self.normalGeometry()
+            self._window_maximized = maximized
+            self._refresh_window_state_button()
+
     def _toggle_window_size(self) -> None:
         screen = self.screen() or QApplication.primaryScreen()
         if screen is None:
             return
         available = screen.availableGeometry()
         if self._window_maximized:
+            if self.isMaximized():
+                self.showNormal()
             width = min(1120, max(640, available.width() - 80))
             height = min(720, max(480, available.height() - 80))
-            self._normal_geometry = QRect(0, 0, width, height)
-            self._normal_geometry.moveCenter(available.center())
+            if self._normal_geometry is None or self._normal_geometry.isEmpty():
+                self._normal_geometry = QRect(0, 0, width, height)
+                self._normal_geometry.moveCenter(available.center())
             self._window_maximized = False
             self.setGeometry(self._normal_geometry)
         else:
@@ -962,6 +1067,7 @@ class HabitDialog(QDialog):
         return container
 
     def _render_habits(self) -> None:
+        self._close_inline_editors()
         self.habit_list.blockSignals(True)
         self.habit_list.clear()
         for i, text in enumerate(self._habits, start=1):
@@ -989,7 +1095,12 @@ class HabitDialog(QDialog):
             self._push_undo()
             self._habits[index] = new_text
             self._persist_habits()
-        # Re-render to normalize the leading "N.  " numbering.
+        # Re-render to normalize the leading "N.  " numbering. This runs from
+        # itemChanged, i.e. while the editor is still committing the item, so
+        # clearing the list right here would free the item under Qt. Defer it.
+        QTimer.singleShot(0, lambda r=index: self._rerender_habits_at(r))
+
+    def _rerender_habits_at(self, index: int) -> None:
         self._render_habits()
         if 0 <= index < self.habit_list.count():
             self.habit_list.setCurrentRow(index)
@@ -1026,6 +1137,7 @@ class HabitDialog(QDialog):
             self.habit_list.setCurrentRow(min(index, len(self._habits) - 1))
 
     def _show_habit_context_menu(self, pos: QPoint) -> None:
+        self._close_inline_editors()
         item = self.habit_list.itemAt(pos)
         menu = QMenu(self.habit_list)
         if item is not None:
@@ -1043,6 +1155,7 @@ class HabitDialog(QDialog):
         menu.exec(self.habit_list.mapToGlobal(pos))
 
     def _render_tasks(self) -> None:
+        self._close_inline_editors()
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         for task in self._tasks:
@@ -1102,6 +1215,7 @@ class HabitDialog(QDialog):
         )
 
     def _render_backlog(self, lw: QListWidget, tasks: List[PlanTask]) -> None:
+        self._close_inline_editors()
         lw.blockSignals(True)
         lw.clear()
         for task in tasks:
@@ -1349,27 +1463,31 @@ class HabitDialog(QDialog):
         # Space-to-cycle-status was removed on purpose: users found it too
         # easy to flip a task's state accidentally while navigating. Status
         # changes now go exclusively through the right-click context menu.
+        # Shortcuts that rebuild or re-index the lists are wrapped with
+        # _guard_editor so an inline editor that still has focus is committed
+        # and closed before the rows change underneath it (see
+        # _close_inline_editors). F2 / Escape keep their own editor semantics.
         window_bindings = [
-            ("F2", self._edit_selected),
-            ("Alt+Up", lambda: self._move(-1)),
-            ("Alt+Down", lambda: self._move(1)),
-            ("Ctrl++", self._add_new_task),
-            ("Ctrl+=", self._add_new_task),
-            ("Ctrl+Shift+=", self._add_new_task),
-            ("Ctrl+-", self._delete_selected),
-            ("Ctrl+Minus", self._delete_selected),
-            ("Ctrl+Return", self._save_and_accept),
-            ("Ctrl+Enter", self._save_and_accept),
-            ("Ctrl+P", self._focus_pomodoro_on_selected),
-            ("Ctrl+Z", self._undo),
-            ("Ctrl+Y", self._redo),
-            ("Ctrl+Shift+Z", self._redo),
-            ("Escape", self.reject),
+            ("F2", self._edit_selected, False),
+            ("Alt+Up", lambda: self._move(-1), True),
+            ("Alt+Down", lambda: self._move(1), True),
+            ("Ctrl++", self._add_new_task, True),
+            ("Ctrl+=", self._add_new_task, True),
+            ("Ctrl+Shift+=", self._add_new_task, True),
+            ("Ctrl+-", self._delete_selected, True),
+            ("Ctrl+Minus", self._delete_selected, True),
+            ("Ctrl+Return", self._save_and_accept, True),
+            ("Ctrl+Enter", self._save_and_accept, True),
+            ("Ctrl+P", self._focus_pomodoro_on_selected, True),
+            ("Ctrl+Z", self._undo, True),
+            ("Ctrl+Y", self._redo, True),
+            ("Ctrl+Shift+Z", self._redo, True),
+            ("Escape", self.reject, False),
         ]
-        for sequence, callback in window_bindings:
+        for sequence, callback, guard in window_bindings:
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.WindowShortcut)
-            shortcut.activated.connect(callback)
+            shortcut.activated.connect(self._guard_editor(callback) if guard else callback)
 
         # Plain Enter on the list widget itself starts editing the current row.
         # WidgetShortcut means it only fires when list_widget has focus, NOT
@@ -1492,6 +1610,50 @@ class HabitDialog(QDialog):
             item = self.list_widget.item(index)
             if item is not None:
                 self.list_widget.editItem(item)
+
+    def _close_inline_editors(self) -> None:
+        """Commit and close any inline row editor before rows are rebuilt.
+
+        Every `_render_*` helper calls `QListWidget.clear()`, which deletes the
+        items underneath the item delegate. Rebuilding the list while an inline
+        QLineEdit is still open on one of those items (or while its itemChanged
+        is being dispatched) is a risky sequence for Qt; the crash.log access
+        violations all happen inside these rebuilds. Window shortcuts such as
+        Alt+↑ or Ctrl++ fire while that editor still has focus, so they must
+        close it first.
+
+        Moving focus to the owning list makes the delegate run its normal
+        focus-out path: the text is committed into the model (itemChanged ->
+        our handler updates the task) and the editor is closed. Only if that
+        does not close it, the editor is reverted and closed explicitly.
+        `_suppress_advance_once` stops the Excel-style "jump to next row" from
+        kicking in while we do this.
+        """
+        if self._closing_editor:
+            return
+        for lw in (self.list_widget, self.work_list, self.life_list, self.habit_list):
+            if lw.state() != QAbstractItemView.State.EditingState:
+                continue
+            self._closing_editor = True
+            self._suppress_advance_once = True
+            try:
+                lw.setFocus()
+                if lw.state() == QAbstractItemView.State.EditingState:
+                    for editor in lw.viewport().findChildren(QLineEdit):
+                        lw.itemDelegate().closeEditor.emit(
+                            editor, QAbstractItemDelegate.EndEditHint.RevertModelCache
+                        )
+            finally:
+                self._suppress_advance_once = False
+                self._closing_editor = False
+            return
+
+    def _guard_editor(self, action):
+        """Wrap a shortcut callback so an open inline editor is committed first."""
+        def _run(*_args) -> None:
+            self._close_inline_editors()
+            action()
+        return _run
 
     def _refresh_item(self, index: int) -> None:
         if not (0 <= index < len(self._tasks)):
@@ -1702,6 +1864,7 @@ class HabitDialog(QDialog):
         self._update_stats()
 
     def _show_context_menu(self, pos: QPoint) -> None:
+        self._close_inline_editors()
         item = self.list_widget.itemAt(pos)
         menu = QMenu(self.list_widget)
         if item is not None:
@@ -1996,8 +2159,9 @@ class HabitDialog(QDialog):
         if tasks[index].text != new_text:
             self._push_undo()
             tasks[index].text = new_text
-        # Re-render to normalize decorations / refresh the section count.
-        self._render_backlogs()
+        # Re-render to normalize decorations / refresh the section count. Defer:
+        # we are inside itemChanged while the editor commits this very item.
+        QTimer.singleShot(0, self._render_backlogs)
 
     def _edit_backlog_row(self, lw: QListWidget, index: int) -> None:
         if 0 <= index < lw.count():
@@ -2117,6 +2281,7 @@ class HabitDialog(QDialog):
         lw = self.sender()
         if not isinstance(lw, QListWidget):
             return
+        self._close_inline_editors()
         tasks = self._tasks_for(lw)
         item = lw.itemAt(pos)
         menu = QMenu(lw)
@@ -2568,11 +2733,15 @@ class ReflectionToast(QFrame):
         self.set_task(task, self._on_reflect)
         self.adjustSize()
         parent = self.parentWidget()
-        if parent is not None:
-            self.move(
-                max(12, parent.width() - self.width() - 28),
-                max(12, parent.height() - self.height() - 28),
-            )
+        if parent is not None and hasattr(parent, "start_btn"):
+            # Anchor to the right edge of the task card, just above the footer
+            # buttons, so the toast never covers "跳过" / "开始今天".
+            card = parent.task_card
+            card_right = card.mapTo(parent, QPoint(card.width(), 0)).x()
+            footer_top = parent.start_btn.mapTo(parent, QPoint(0, 0)).y()
+            x = max(12, card_right - self.width() - 20)
+            y = max(12, footer_top - self.height() - 14)
+            self.move(x, y)
         self.show()
         self.raise_()
         self._timer.start(15000)

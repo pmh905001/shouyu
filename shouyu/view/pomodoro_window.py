@@ -716,8 +716,6 @@ class PomodoroWindow(QWidget):
 
         toggle_action = menu.addAction("番茄：启停")
         toggle_action.triggered.connect(self._on_toggle_clicked)
-        show_action = menu.addAction("番茄：显示")
-        show_action.triggered.connect(self.summon)
         phase = self._phase
         if phase in ("working", "planning"):
             extend_action = menu.addAction("延长 5 分钟")
