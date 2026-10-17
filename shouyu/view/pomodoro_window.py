@@ -5,6 +5,8 @@ events from PomodoroService through QtApp.emit_pomodoro_event(...).
 """
 from __future__ import annotations
 
+import logging
+import math
 import random
 import re
 import sys
@@ -20,6 +22,7 @@ from PySide6.QtCore import (
     QTimer,
 )
 from PySide6.QtGui import (
+    QActionGroup,
     QColor,
     QContextMenuEvent,
     QFont,
@@ -28,7 +31,9 @@ from PySide6.QtGui import (
     QLinearGradient,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
+    QPolygonF,
     QRadialGradient,
     QShortcut,
 )
@@ -107,6 +112,16 @@ _BALL_COLORS = {
     "lunch_break": _BREAK_BALL_COLOR,
 }
 
+# Floating-window skins. The tomato reuses the same (highlight, body, edge)
+# palette as the ball, so red = focus, green = break, grey = idle/paused.
+_SKIN_BALL = "ball"
+_SKIN_TOMATO = "tomato"
+_SKIN_LABELS = {
+    _SKIN_BALL: "小圆球",
+    _SKIN_TOMATO: "番茄",
+}
+_SKIN_STATE_KEY = "pomodoro_skin"
+
 
 class PomodoroWindow(QWidget):
     _instance: Optional["PomodoroWindow"] = None
@@ -133,6 +148,8 @@ class PomodoroWindow(QWidget):
         # expands the ball; remember that so acknowledging collapses it again.
         self._expanded_by_alarm = False
         self._phase = "idle"
+        # Which picture the compact form draws: the glass ball or a tomato.
+        self._skin = self._load_skin()
 
         # Mirror of QWidget visibility, kept in sync via show/hideEvent.
         # Reading QWidget.isVisible() from non-Qt threads (the tray thread,
@@ -446,6 +463,27 @@ class PomodoroWindow(QWidget):
     def _ball_colors(self) -> tuple[str, str, str]:
         return _BALL_COLORS.get(self._phase, _IDLE_BALL_COLOR)
 
+    # ---------- skin (ball / tomato) ----------
+
+    @staticmethod
+    def _load_skin() -> str:
+        from shouyu.util.state import AppState
+
+        skin = AppState.get(_SKIN_STATE_KEY, _SKIN_BALL)
+        return skin if skin in _SKIN_LABELS else _SKIN_BALL
+
+    def set_skin(self, skin: str) -> None:
+        if skin not in _SKIN_LABELS or skin == self._skin:
+            return
+        self._skin = skin
+        self.ball.update()
+        try:
+            from shouyu.util.state import AppState
+
+            AppState.set(_SKIN_STATE_KEY, skin)
+        except Exception:
+            logging.exception("failed to persist pomodoro skin: %s", skin)
+
     def _disable_native_frame(self) -> None:
         """Windows 11 draws its own rounded corners, 1px border and backdrop
         around every top-level window, which shows up as a square frame
@@ -716,6 +754,17 @@ class PomodoroWindow(QWidget):
 
         toggle_action = menu.addAction("番茄：启停")
         toggle_action.triggered.connect(self._on_toggle_clicked)
+        # Parent the submenu explicitly so Qt owns it for the popup's lifetime.
+        skin_menu = QMenu("皮肤", menu)
+        menu.addMenu(skin_menu)
+        skin_group = QActionGroup(skin_menu)
+        skin_group.setExclusive(True)
+        for skin, label in _SKIN_LABELS.items():
+            skin_action = skin_menu.addAction(label)
+            skin_action.setCheckable(True)
+            skin_action.setChecked(skin == self._skin)
+            skin_group.addAction(skin_action)
+            skin_action.triggered.connect(lambda _checked=False, s=skin: self.set_skin(s))
         phase = self._phase
         if phase in ("working", "planning"):
             extend_action = menu.addAction("延长 5 分钟")
@@ -1154,7 +1203,12 @@ class _BallView(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
         painter.setPen(Qt.NoPen)
+        if owner._skin == _SKIN_TOMATO:
+            self._paint_tomato(painter, owner, light, body, edge)
+        else:
+            self._paint_sphere(painter, owner, light, body, edge)
 
+    def _paint_sphere(self, painter, owner, light, body, edge) -> None:
         d = float(_BALL_DIAMETER)
         r = d / 2
         sphere = QRectF((self.width() - d) / 2, (self.height() - d) / 2 - 3, d, d)
@@ -1172,23 +1226,7 @@ class _BallView(QWidget):
         # stronger red/yellow pulse alternates every timer tick so it remains
         # noticeable even when the ball is small or over a colorful desktop.
         if owner._idle_warning_active:
-            pulse = owner._blink_on
-            glow = QRadialGradient(cx, cy, r + 10)
-            glow.setColorAt(
-                r / (r + 10),
-                QColor(255, 59, 48, 235 if pulse else 145),
-            )
-            glow.setColorAt(1.0, QColor(255, 59, 48, 0))
-            painter.setBrush(glow)
-            painter.drawEllipse(sphere.adjusted(-10, -10, 10, 10))
-            painter.setBrush(Qt.NoBrush)
-            painter.setPen(
-                QPen(
-                    QColor(255, 212, 59) if pulse else QColor(255, 110, 70),
-                    3.0 if pulse else 2.0,
-                )
-            )
-            painter.drawEllipse(sphere.adjusted(-2, -2, 2, 2))
+            self._draw_idle_halo(painter, owner, cx, cy, r, sphere)
 
         # Sphere body: light source at top-left, deep color at the rim.
         body_grad = QRadialGradient(cx, cy, r, cx - r * 0.35, cy - r * 0.45)
@@ -1228,36 +1266,185 @@ class _BallView(QWidget):
         painter.drawEllipse(sphere.adjusted(0.5, 0.5, -0.5, -0.5))
 
         if owner._idle_warning_active:
-            badge_center = QPointF(sphere.right() - 3, sphere.top() + 4)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#B71C1C"))
-            painter.drawEllipse(badge_center, 9, 9)
-            badge_font = QFont("Segoe UI", 1)
-            badge_font.setPixelSize(12)
-            badge_font.setBold(True)
-            painter.setFont(badge_font)
-            painter.setPen(QColor("#FFFFFF"))
-            painter.drawText(
-                QRectF(
-                    badge_center.x() - 8,
-                    badge_center.y() - 8,
-                    16,
-                    16,
-                ),
-                Qt.AlignCenter,
-                "!",
-            )
+            self._draw_idle_badge(painter, QPointF(sphere.right() - 3, sphere.top() + 4))
 
+        time_rect = QRectF(sphere.left(), sphere.top() + d * 0.26, d, d * 0.36)
+        caption_rect = QRectF(sphere.left(), sphere.top() + d * 0.60, d, d * 0.18)
+        self._draw_countdown(painter, owner, time_rect, caption_rect)
+
+    @staticmethod
+    def _draw_idle_halo(painter, owner, cx: float, cy: float, r: float, rect: QRectF) -> None:
+        """Red warning halo + ring around a round or round-ish body of radius r."""
+        pulse = owner._blink_on
+        glow = QRadialGradient(cx, cy, r + 10)
+        glow.setColorAt(
+            r / (r + 10),
+            QColor(255, 59, 48, 235 if pulse else 145),
+        )
+        glow.setColorAt(1.0, QColor(255, 59, 48, 0))
+        painter.setBrush(glow)
+        painter.drawEllipse(rect.adjusted(-10, -10, 10, 10))
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(
+            QPen(
+                QColor(255, 212, 59) if pulse else QColor(255, 110, 70),
+                3.0 if pulse else 2.0,
+            )
+        )
+        painter.drawEllipse(rect.adjusted(-2, -2, 2, 2))
+
+    @staticmethod
+    def _draw_idle_badge(painter, badge_center: QPointF) -> None:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#B71C1C"))
+        painter.drawEllipse(badge_center, 9, 9)
+        badge_font = QFont("Segoe UI", 1)
+        badge_font.setPixelSize(12)
+        badge_font.setBold(True)
+        painter.setFont(badge_font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(
+            QRectF(
+                badge_center.x() - 8,
+                badge_center.y() - 8,
+                16,
+                16,
+            ),
+            Qt.AlignCenter,
+            "!",
+        )
+
+    @classmethod
+    def _draw_countdown(cls, painter, owner, time_rect: QRectF, caption_rect: QRectF) -> None:
         time_font = QFont("Segoe UI", 1)
         time_font.setPixelSize(19)
         time_font.setWeight(QFont.DemiBold)
-        time_rect = QRectF(sphere.left(), sphere.top() + d * 0.26, d, d * 0.36)
-        self._draw_text(painter, time_rect, time_font, owner.time_label.text(), 255)
+        cls._draw_text(painter, time_rect, time_font, owner.time_label.text(), 255)
 
         caption_font = QFont("Microsoft YaHei UI", 1)
         caption_font.setPixelSize(10)
-        caption_rect = QRectF(sphere.left(), sphere.top() + d * 0.60, d, d * 0.18)
-        self._draw_text(painter, caption_rect, caption_font, owner._ball_caption(), 225)
+        cls._draw_text(painter, caption_rect, caption_font, owner._ball_caption(), 225)
+
+    def _paint_tomato(self, painter, owner, light, body, edge) -> None:
+        """Glass tomato: same palette as the ball (red focus / green break /
+        grey idle), with a translucent body, a green calyx and stem."""
+        w, h = 70.0, 60.0
+        cx = self.width() / 2
+        body_rect = QRectF(cx - w / 2, 20.0, w, h)
+        left, right = body_rect.left(), body_rect.right()
+        top, bottom = body_rect.top(), body_rect.bottom()
+        cy = body_rect.center().y()
+
+        # Tomato outline: a shallow dimple at the top, broad shoulders, and
+        # a slightly flattened base.
+        path = QPainterPath()
+        path.moveTo(cx, top + 6)
+        path.cubicTo(cx - w * 0.34, top - 3, left, top + 1, left, cy)
+        path.cubicTo(left, bottom - h * 0.26, cx - w * 0.36, bottom, cx, bottom)
+        path.cubicTo(cx + w * 0.36, bottom, right, bottom - h * 0.26, right, cy)
+        path.cubicTo(right, top + 1, cx + w * 0.34, top - 3, cx, top + 6)
+        path.closeSubpath()
+
+        # Soft contact shadow under the fruit.
+        painter.save()
+        painter.translate(cx, bottom - 4)
+        painter.scale(1.0, 0.28)
+        shadow = QRadialGradient(0, 0, 34)
+        shadow.setColorAt(0.0, QColor(0, 0, 0, 90))
+        shadow.setColorAt(0.7, QColor(0, 0, 0, 60))
+        shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setBrush(shadow)
+        painter.drawEllipse(QRectF(-34, -34, 68, 68))
+        painter.restore()
+
+        if owner._idle_warning_active:
+            self._draw_idle_halo(painter, owner, cx, cy, w / 2, body_rect)
+
+        # Translucent body: light from top-left, deep colour at the rim.
+        body_grad = QRadialGradient(cx, cy, w * 0.62, cx - w * 0.28, cy - h * 0.45)
+        body_grad.setColorAt(0.0, self._with_alpha(light, 240))
+        body_grad.setColorAt(0.55, self._with_alpha(body, 236))
+        body_grad.setColorAt(1.0, self._with_alpha(edge, 248))
+        painter.setBrush(body_grad)
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(path)
+
+        # Inner light: pooled at the bottom and a faint core, clipped to the
+        # body so it reads as light passing through the flesh.
+        painter.save()
+        painter.setClipPath(path)
+        pool = QRadialGradient(cx, bottom - 4, w * 0.55)
+        pool.setColorAt(0.0, self._with_alpha(light, 140))
+        pool.setColorAt(1.0, self._with_alpha(light, 0))
+        painter.setBrush(pool)
+        painter.drawRect(body_rect)
+        # Light passing through the bottom edge: a bright band just inside
+        # the outline, made by stroking the outline shifted upward.
+        transmit = QPainterPath(path)
+        transmit.translate(0, -3.0)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(self._with_alpha(light, 170), 2.5))
+        painter.drawPath(transmit)
+        painter.setPen(Qt.NoPen)
+        core = QRadialGradient(cx, cy + 4, w * 0.32)
+        core.setColorAt(0.0, QColor(255, 255, 255, 70))
+        core.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(core)
+        painter.drawEllipse(QPointF(cx, cy + 4), w * 0.32, w * 0.32)
+        # Glossy highlight on the upper-left shoulder.
+        gloss_rect = QRectF(left + w * 0.14, top + h * 0.10, w * 0.46, h * 0.30)
+        gloss = QLinearGradient(gloss_rect.topLeft(), gloss_rect.bottomLeft())
+        gloss.setColorAt(0.0, QColor(255, 255, 255, 200))
+        gloss.setColorAt(0.6, QColor(255, 255, 255, 40))
+        gloss.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(gloss)
+        painter.drawEllipse(gloss_rect)
+        painter.restore()
+
+        # Tiny specular sparkle and a crisp glass rim.
+        spark_c = QPointF(left + w * 0.30, top + h * 0.22)
+        spark = QRadialGradient(spark_c, 4.0)
+        spark.setColorAt(0.0, QColor(255, 255, 255, 230))
+        spark.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(spark)
+        painter.drawEllipse(spark_c, 4.0, 4.0)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 80), 1.0))
+        painter.drawPath(path)
+
+        # Green calyx (five sepals fanning over the shoulders) and the stem.
+        calyx_c = QPointF(cx, top + 4)
+        sepals = QPolygonF()
+        for k in range(10):
+            angle = -math.pi / 2 + k * math.pi / 5
+            radius = 22.0 if k % 2 == 0 else 9.0
+            sepals.append(
+                QPointF(
+                    calyx_c.x() + radius * math.cos(angle),
+                    calyx_c.y() + radius * math.sin(angle) * 0.42,
+                )
+            )
+        calyx_grad = QLinearGradient(QPointF(cx, top - 6), QPointF(cx, top + 10))
+        calyx_grad.setColorAt(0.0, QColor("#A5E08E"))
+        calyx_grad.setColorAt(1.0, QColor("#2E7D32"))
+        painter.setBrush(calyx_grad)
+        painter.setPen(QPen(QColor(20, 90, 34, 160), 0.8))
+        painter.drawPolygon(sepals)
+        stem = QPainterPath()
+        stem.moveTo(cx, top - 1)
+        stem.cubicTo(cx + 1, top - 6, cx + 4, top - 8, cx + 5, top - 12)
+        stem_pen = QPen(QColor("#2E7D32"), 3.0)
+        stem_pen.setCapStyle(Qt.RoundCap)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(stem_pen)
+        painter.drawPath(stem)
+
+        if owner._idle_warning_active:
+            self._draw_idle_badge(painter, QPointF(right - 4, top + 8))
+
+        time_rect = QRectF(left, top + h * 0.22, w, h * 0.42)
+        caption_rect = QRectF(left, top + h * 0.62, w, h * 0.20)
+        self._draw_countdown(painter, owner, time_rect, caption_rect)
 
     @staticmethod
     def _draw_text(painter: QPainter, rect: QRectF, font: QFont, text: str, alpha: int) -> None:

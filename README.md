@@ -49,6 +49,7 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-10-17
 
+- **悬浮窗皮肤切换（小圆球 / 番茄）**：小球右键菜单新增「皮肤」子菜单，可在「小圆球」和「番茄」之间切换，选择会保存在 `shouyu_state.json` 中。番茄为玻璃质感，工作时红色、休息时绿色、空闲或暂停时灰色，与小球配色一致；窗口尺寸与拖动、警告光晕等行为不变。（`shouyu/view/pomodoro_window.py`）
 - **修复「番茄: 显示」无响应、无法隐藏**：托盘里的「番茄: 显示」原先只会显示（小球已可见时点击无变化）；现改为「番茄: 显示/隐藏」切换，与快捷键 ctrl+alt+t 行为一致。小球右键菜单中的同名项已移除，隐藏请使用「隐藏（ctrl+alt+t）」。（`shouyu/view/tray.py`、`shouyu/view/pomodoro_window.py`）
 - **托盘菜单新增「番茄: 暂停/继续」**：位于「番茄: 启停」之后；番茄进行中点击暂停，暂停中点击继续，空闲时不做任何事（开始请用「番茄: 启停」）。（`shouyu/view/tray.py`）
 - **完成任务提示不再遮挡底部按钮**：「任务已完成」反思提示原先固定在窗口右下角，会压住「开始今天」按钮；现改为锚定在任务列表右下角、底部按钮行上方。（`shouyu/view/habit_dialog.py`）
