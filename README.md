@@ -47,6 +47,11 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-10-21
+
+- **修复 Ctrl+Alt+H 习惯窗口长时间卡死、随后无响应崩溃**：根因是 `plan.py` 的 `count_pomodoros_logged()` 在逐行循环里每次都调用 openpyxl 的 `max_column`（会遍历整张表的全部单元格），复杂度为「行数 × 单元格数」；而 `_select_latest_history_day()` 又对最近 30 天逐日调用它，实测刷新一次耗时约 262 秒，期间 UI 线程被阻塞。修复后列数只解析一次（`iter_rows` 按列上限读取，结果与旧实现一致），刷新耗时降至约 2 秒。（`shouyu/service/plan.py`）
+- **习惯窗口减少重复加载 Excel**：`_render_review()` 每次 `_update_stats()`（新增、编辑、删除任务时都会触发）都会重新 `KbExcel()` 加载整本工作簿，现改为刷新时计算一次今日番茄数并缓存；历史日期选择复用同一个已加载的工作簿，单次打开只加载一次。今日番茄数的复盘信息在窗口打开期间不会实时更新，重新打开即同步。（`shouyu/view/habit_dialog.py`）
+
 ## 2026-10-17
 
 - **悬浮窗皮肤切换（小圆球 / 番茄）**：小球右键菜单新增「皮肤」子菜单，可在「小圆球」和「番茄」之间切换，选择会保存在 `shouyu_state.json` 中。番茄为玻璃质感，工作时红色、休息时绿色、空闲或暂停时灰色，与小球配色一致；窗口尺寸与拖动、警告光晕等行为不变。（`shouyu/view/pomodoro_window.py`）

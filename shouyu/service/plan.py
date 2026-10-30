@@ -595,10 +595,14 @@ class PlanService:
         """Count active-area cells that look like a logged pomodoro line."""
         start = self.active_area_start_row()
         end = max(self.ws.max_row, start)
+        # Resolve the column bound once. openpyxl's max_column walks every cell
+        # in the sheet, so evaluating it per row made this O(rows * cells).
+        max_col = max(self.ws.max_column, 3)
         count = 0
-        for row in range(start, end + 1):
-            for col_idx in range(1, max(self.ws.max_column, 3) + 1):
-                value = self.ws.cell(row=row, column=col_idx).value
+        for row_values in self.ws.iter_rows(
+            min_row=start, max_row=end, max_col=max_col, values_only=True
+        ):
+            for value in row_values:
                 if isinstance(value, str) and value.strip().startswith(POMODORO_LOG_PREFIX):
                     count += 1
                     break

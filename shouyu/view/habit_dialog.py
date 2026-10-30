@@ -421,6 +421,8 @@ class HabitDialog(QDialog):
         # PlanService.mark_plan_done() during the next save. Tracking them
         # also lets `_has_unsaved_changes` flag this kind of edit.
         self._yesterday_marked_done_rows: set = set()
+        # Today's logged pomodoro count, cached by refresh_plan_from_excel().
+        self._today_pomodoros = 0
         # Cache of the latest snapshot dict passed into _render_yesterday so
         # we can re-render after today-list mutations without re-reading Excel.
         self._yesterday_snap: dict = {
@@ -469,6 +471,15 @@ class HabitDialog(QDialog):
             logging.exception("failed to read plan from Excel")
             tasks = []
 
+        # Pomodoro count for today's recap. Computed here, while the workbook is
+        # already loaded, instead of re-reading Excel on every _update_stats().
+        self._today_pomodoros = 0
+        if excel is not None:
+            try:
+                self._today_pomodoros = excel.plan_service().count_pomodoros_logged()
+            except Exception:
+                logging.exception("failed to count today's pomodoros")
+
         self._tasks = tasks
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
@@ -504,7 +515,7 @@ class HabitDialog(QDialog):
 
         # Carry-over history & streak: cheap enough to fetch on every open.
         self._yesterday_marked_done_rows = set()
-        self._select_latest_history_day()
+        self._select_latest_history_day(excel)
         self._render_streak()
 
     def show_fullscreen(self) -> None:
@@ -1242,14 +1253,19 @@ class HabitDialog(QDialog):
     def _select_history_offset(self, days: int) -> None:
         self._select_history_date(self._date_days_ago(days))
 
-    def _select_latest_history_day(self) -> None:
-        """Pick the nearest previous worksheet that contains tasks."""
+    def _select_latest_history_day(self, excel=None) -> None:
+        """Pick the nearest previous worksheet that contains tasks.
+
+        Reuses the workbook already loaded by refresh_plan_from_excel(): every
+        KbExcel() construction re-parses the whole (large) workbook, so loading
+        it once per candidate day froze the UI for minutes.
+        """
         today = AppState.today_str()
         selected = self._date_days_ago(1)
         try:
             from shouyu.service.excel import KbExcel
 
-            excel = KbExcel()
+            excel = excel or KbExcel()
             for days in range(1, 31):
                 candidate = self._date_days_ago(days)
                 snapshot = _read_day_snapshot(candidate, excel)
@@ -1258,7 +1274,7 @@ class HabitDialog(QDialog):
                     break
         except Exception:
             logging.exception("failed to find latest history day")
-        self._select_history_date(selected)
+        self._select_history_date(selected, excel)
         if selected == today:
             self.history_label.setText("没有可用的历史日期")
 
@@ -1283,10 +1299,10 @@ class HabitDialog(QDialog):
             return
         self._select_history_date(date_text)
 
-    def _select_history_date(self, date_str: str) -> None:
+    def _select_history_date(self, date_str: str, excel=None) -> None:
         self._selected_history_date = date_str
         self._yesterday_marked_done_rows = set()
-        snapshot = _read_day_snapshot(date_str)
+        snapshot = _read_day_snapshot(date_str, excel)
         self._yesterday_unfinished = list(snapshot["unfinished"])
         self._render_yesterday(snapshot)
 
@@ -2425,10 +2441,9 @@ class HabitDialog(QDialog):
         meaningful — too early in the day).
         """
         try:
-            from shouyu.service.excel import KbExcel
             from shouyu.service.pomodoro import PomodoroService
 
-            pomodoros = KbExcel().plan_service().count_pomodoros_logged()
+            pomodoros = self._today_pomodoros
         except Exception:
             logging.exception("failed to compute day review")
             self.review_label.setVisible(False)
