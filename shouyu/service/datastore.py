@@ -21,6 +21,7 @@ _BUSY_TIMEOUT_MS = 5000
 META_SCHEMA_VERSION = 'schema_version'
 META_IMPORT_FINISHED_AT = 'excel_import_finished_at'
 META_IMPORT_SOURCE = 'excel_import_source'
+META_NOTES_IMPORT_FINISHED_AT = 'excel_notes_import_finished_at'
 
 _META_DDL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -118,6 +119,35 @@ _MIGRATIONS: Dict[int, List[str]] = {
         """,
         "CREATE INDEX IF NOT EXISTS ix_note_date ON note(plan_date)",
     ],
+    # docs/design/retrieval/20261031-01-notes-panel-and-day-view.md §3.1:
+    # notes can be edited, deleted, added by hand and imported from Excel.
+    # SQLite cannot alter a CHECK constraint, so the table is rebuilt; ids are
+    # kept, so queued `clipboard_append` messages still point at their note.
+    2: [
+        """
+        CREATE TABLE note_v2 (
+            id            INTEGER PRIMARY KEY,
+            plan_date     TEXT    NOT NULL,
+            kind          TEXT    NOT NULL CHECK (kind IN ('text', 'image')),
+            text          TEXT    NOT NULL DEFAULT '',
+            attachment_id INTEGER REFERENCES attachments(id),
+            source        TEXT    NOT NULL CHECK (source IN ('clipboard', 'ocr', 'manual', 'excel_import')),
+            source_ref    TEXT,
+            excel_column  TEXT    CHECK (excel_column IN ('A', 'B')),
+            created_at    TEXT    NOT NULL,
+            updated_at    TEXT,
+            deleted_at    TEXT
+        )
+        """,
+        "INSERT INTO note_v2 (id, plan_date, kind, text, attachment_id, source, excel_column, created_at) "
+        "SELECT id, plan_date, kind, text, attachment_id, source, excel_column, created_at FROM note",
+        "DROP TABLE note",
+        "ALTER TABLE note_v2 RENAME TO note",
+        # Keyset paging in both directions and per-day lookups.
+        "CREATE INDEX IF NOT EXISTS ix_note_date ON note(plan_date, id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_note_source_ref ON note(source, source_ref) "
+        "WHERE source_ref IS NOT NULL",
+    ],
 }
 
 SCHEMA_VERSION = max(_MIGRATIONS)
@@ -138,6 +168,14 @@ def _open() -> sqlite3.Connection:
     conn.execute(f'PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}')
     conn.execute('PRAGMA foreign_keys=ON')
     return conn
+
+
+def open_connection() -> sqlite3.Connection:
+    """A long-lived connection for a background reader (e.g. note search),
+    which needs `conn.interrupt()` to cancel a running query. The caller
+    owns and closes it."""
+    ensure_schema()
+    return _open()
 
 
 @contextlib.contextmanager

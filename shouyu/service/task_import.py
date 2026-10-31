@@ -38,6 +38,7 @@ _DATE_SHEET = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _POMODORO_LINE = re.compile(r'🍅\s*(\d+)min\s*@(\d{1,2}:\d{2})-(\d{1,2}:\d{2})')
 
 _running = threading.Event()
+_notes_running = threading.Event()
 _lock = threading.Lock()
 
 
@@ -110,10 +111,14 @@ def _parse_pomodoros(date_str: str, plan: PlanService) -> List[_ParsedPomodoro]:
     return out
 
 
-def _parse_workbook(path: str):
+def _load_workbook(path: str):
     import openpyxl
 
-    workbook = openpyxl.load_workbook(path)
+    return openpyxl.load_workbook(path)
+
+
+def _parse_workbook(path: str, workbook=None):
+    workbook = workbook or _load_workbook(path)
     days: List[_ParsedDay] = []
     for name in sorted(n for n in workbook.sheetnames if _DATE_SHEET.match(n)):
         plan = PlanService(workbook[name])
@@ -148,7 +153,7 @@ def _insert_task(conn, task: PlanTask, source_ref: str, created_at: str) -> int:
     ).fetchone()['id']
 
 
-def run_import(excel_path: Optional[str] = None) -> ImportResult:
+def run_import(excel_path: Optional[str] = None, workbook=None) -> ImportResult:
     """Import every dated sheet, both backlog sheets and the 🍅 lines.
     Marks the import finished in `meta` only when it succeeds."""
     path = excel_path or Config.excel_path()
@@ -158,7 +163,7 @@ def run_import(excel_path: Optional[str] = None) -> ImportResult:
         logging.warning(f'task import skipped: {result.skipped_reason}')
         return result
 
-    days, backlog = _parse_workbook(path)
+    days, backlog = _parse_workbook(path, workbook)
     with datastore.transaction() as conn:
         for day in days:
             created_at = _local_to_utc_iso(day.date)
@@ -212,36 +217,188 @@ def run_import(excel_path: Optional[str] = None) -> ImportResult:
     return result
 
 
+@dataclass
+class _ParsedNote:
+    date: str
+    cell: str
+    column: str
+    text: str
+
+
+@dataclass
+class NotesImportResult:
+    notes: int = 0
+    skipped_pomodoro_lines: int = 0
+    skipped_duplicates: int = 0
+    sheets_without_header: List[str] = field(default_factory=list)
+    skipped_reason: str = ''
+
+
+def _cell_text(value) -> str:
+    if value is None:
+        return ''
+    if hasattr(value, 'strftime'):
+        try:
+            return value.strftime('%Y-%m-%d %H:%M' if getattr(value, 'hour', 0) or getattr(value, 'minute', 0) else '%Y-%m-%d')
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _parse_notes(workbook, result: NotesImportResult) -> List[_ParsedNote]:
+    """Every non-empty cell below the `other` header, row by row and left to
+    right in a row: one cell = one note (R-Q10). Images stay in Excel (R-Q5).
+    🍅 lines that ended up below the header are pomodoro logs, already
+    imported as pomodoros, so they are not notes."""
+    from openpyxl.utils import get_column_letter
+
+    notes: List[_ParsedNote] = []
+    for name in sorted(n for n in workbook.sheetnames if _DATE_SHEET.match(n)):
+        ws = workbook[name]
+        header = PlanService(ws)._other_header_row()
+        if not header:
+            result.sheets_without_header.append(name)
+            continue
+        for row_offset, values in enumerate(
+            ws.iter_rows(min_row=header + 1, max_row=max(ws.max_row, header + 1), values_only=True)
+        ):
+            for col_offset, value in enumerate(values):
+                text = _cell_text(value)
+                if not text.strip():
+                    continue
+                if text.strip().startswith(POMODORO_LOG_PREFIX):
+                    result.skipped_pomodoro_lines += 1
+                    continue
+                column = get_column_letter(col_offset + 1)
+                notes.append(_ParsedNote(
+                    date=name, cell=f'{column}{header + 1 + row_offset}', column=column, text=text,
+                ))
+    return notes
+
+
+def _switch_day(conn) -> Optional[str]:
+    """Local date of the day v2 took over (the task import finished). Excel's
+    `other` area of that day holds both v1's earlier notes and v2's mirrored
+    ones."""
+    finished = datastore.get_meta(conn, datastore.META_IMPORT_FINISHED_AT)
+    if not finished:
+        return None
+    try:
+        moment = datetime.strptime(finished, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return moment.astimezone().strftime('%Y-%m-%d')
+
+
+def run_notes_import(excel_path: Optional[str] = None, workbook=None) -> NotesImportResult:
+    """Import the historical text of the `other` areas as notes (REC-18,
+    design §4.7). Idempotent through `source_ref`; never queues Excel sync
+    messages, the text is already in Excel."""
+    path = excel_path or Config.excel_path()
+    result = NotesImportResult()
+    if not path or not os.path.exists(path):
+        result.skipped_reason = f'Excel file not found: {path}'
+        logging.warning(f'notes import skipped: {result.skipped_reason}')
+        return result
+
+    parsed = _parse_notes(workbook or _load_workbook(path), result)
+    with datastore.transaction() as conn:
+        switch_day = _switch_day(conn)
+        existing = set()
+        if switch_day:
+            existing = {
+                r['text'].strip() for r in conn.execute(
+                    "SELECT text FROM note WHERE plan_date = ? AND kind = 'text' AND source != 'excel_import' "
+                    "AND deleted_at IS NULL", (switch_day,),
+                )
+            }
+        created_at = {}
+        for note in parsed:
+            if note.date == switch_day and note.text.strip() in existing:
+                result.skipped_duplicates += 1
+                continue
+            if note.date not in created_at:
+                created_at[note.date] = _local_to_utc_iso(note.date)
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO note (plan_date, kind, text, source, source_ref, excel_column, created_at) "
+                "VALUES (?, 'text', ?, 'excel_import', ?, ?, ?)",
+                (note.date, note.text, f'{note.date}!{note.cell}',
+                 note.column if note.column in ('A', 'B') else None, created_at[note.date]),
+            )
+            result.notes += cursor.rowcount
+        datastore.set_meta(conn, datastore.META_NOTES_IMPORT_FINISHED_AT, message_queue.utcnow_iso())
+    logging.info(
+        f'notes import finished from {path}: {result.notes} notes, '
+        f'{result.skipped_duplicates} already in v2, {result.skipped_pomodoro_lines} 🍅 lines skipped; '
+        f'sheets without an "other" header: {", ".join(result.sheets_without_header) or "none"}'
+    )
+    return result
+
+
 def needs_import() -> bool:
     with datastore.reader() as conn:
         return datastore.get_meta(conn, datastore.META_IMPORT_FINISHED_AT) is None
 
 
+def needs_notes_import() -> bool:
+    with datastore.reader() as conn:
+        return datastore.get_meta(conn, datastore.META_NOTES_IMPORT_FINISHED_AT) is None
+
+
 def is_running() -> bool:
+    """True while the *task* import runs (the habit dialog waits for it).
+    The notes import has its own flag and never blocks the dialog."""
     return _running.is_set()
 
 
+def is_notes_import_running() -> bool:
+    return _notes_running.is_set()
+
+
 def start_in_background() -> bool:
-    """Start the import on a daemon thread if it has never completed.
-    Returns True when an import was started."""
+    """Start whichever imports have never completed (tasks first, then the
+    notes) on one daemon thread; the workbook is loaded once. Returns True
+    when something was started."""
     with _lock:
-        if _running.is_set():
+        if _running.is_set() or _notes_running.is_set():
             return False
         try:
-            if not needs_import():
-                return False
+            tasks_needed = needs_import()
+            notes_needed = needs_notes_import()
         except Exception:
-            logging.exception('failed to check whether the task import is needed')
+            logging.exception('failed to check whether the Excel import is needed')
             return False
-        _running.set()
+        if not (tasks_needed or notes_needed):
+            return False
+        if tasks_needed:
+            _running.set()
+        if notes_needed:
+            _notes_running.set()
 
     def _work() -> None:
+        workbook = None
+        path = Config.excel_path()
         try:
-            run_import()
+            if path and os.path.exists(path):
+                workbook = _load_workbook(path)
         except Exception:
-            logging.exception('task import from Excel failed; it will be retried on next startup')
+            logging.exception('failed to open the Excel file for import; it will be retried on next startup')
+        try:
+            if tasks_needed:
+                try:
+                    run_import(path, workbook)
+                except Exception:
+                    logging.exception('task import from Excel failed; it will be retried on next startup')
+                finally:
+                    _running.clear()
+            if notes_needed:
+                try:
+                    run_notes_import(path, workbook)
+                except Exception:
+                    logging.exception('notes import from Excel failed; it will be retried on next startup')
         finally:
             _running.clear()
+            _notes_running.clear()
 
     threading.Thread(target=_work, name='shouyu-task-import', daemon=True).start()
     return True

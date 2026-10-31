@@ -65,7 +65,9 @@ class DialogData:
 class PlanSaveRequest:
     # Local date (YYYY-MM-DD) the window was showing when it was opened.
     plan_date: str
-    today_tasks: List[PlanTask]
+    # None means "this window doesn't edit the day's plan" (the day view's
+    # Backlog page): the day stays exactly as it is.
+    today_tasks: Optional[List[PlanTask]]
     original_in_progress: Optional[str] = None
     # None means "this window doesn't edit that backlog section": leave it as is.
     work_tasks: Optional[List[PlanTask]] = None
@@ -73,11 +75,27 @@ class PlanSaveRequest:
     # Earlier-day tasks the user ticked as done from the carry-over card.
     history_date: Optional[str] = None
     history_done_task_ids: List[int] = field(default_factory=list)
+    # Optimistic locking (day view): the versions read when the window loaded.
+    # When set and the data changed since, save_plan() raises ConflictError
+    # and writes nothing. The habit dialog / todo panel leave them None.
+    expected_day_version: Optional[str] = None
+    expected_backlog_version: Optional[str] = None
 
 
 @dataclass
 class SaveResult:
     changed: bool
+
+
+class ConflictError(Exception):
+    """The day's plan or the backlog was changed by another window since
+    the caller loaded it."""
+
+    def __init__(self, what: str, expected: str, actual: str) -> None:
+        super().__init__(f'{what} changed since it was loaded')
+        self.what = what
+        self.expected = expected
+        self.actual = actual
 
 
 @dataclass
@@ -91,6 +109,8 @@ class PomodoroRecord:
     planned_minutes: Optional[int] = None
     actual_minutes: Optional[int] = None
     ended_early: bool = False
+    # Set on rows read back by load_pomodoros().
+    pomodoro_id: Optional[int] = None
 
 
 # ---------- helpers ----------
@@ -230,6 +250,98 @@ def current_in_progress(today: str) -> Optional[PlanTask]:
     return _row_to_task(row, status=TaskStatus.IN_PROGRESS) if row else None
 
 
+def _iso_to_epoch(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def load_pomodoros(plan_date: str) -> List[PomodoroRecord]:
+    """All pomodoros of one day (work and planning), oldest first."""
+    with datastore.reader() as conn:
+        rows = conn.execute(
+            "SELECT id, task_text, plan_date, kind, mode, started_at, ended_at, planned_minutes, "
+            "actual_minutes, ended_early FROM pomodoro WHERE plan_date = ? "
+            "ORDER BY started_at IS NULL, started_at, id",
+            (plan_date,),
+        ).fetchall()
+    return [
+        PomodoroRecord(
+            plan_date=r['plan_date'],
+            task_text=r['task_text'] or '',
+            kind=r['kind'],
+            mode=r['mode'],
+            started_at=_iso_to_epoch(r['started_at']),
+            ended_at=_iso_to_epoch(r['ended_at']),
+            planned_minutes=r['planned_minutes'],
+            actual_minutes=r['actual_minutes'],
+            ended_early=bool(r['ended_early']),
+            pomodoro_id=r['id'],
+        )
+        for r in rows
+    ]
+
+
+# ---------- versions (optimistic locking for the day view) ----------
+
+def _digest(rows: Iterable[sqlite3.Row]) -> str:
+    import hashlib
+
+    h = hashlib.sha1()
+    count = 0
+    for r in rows:
+        h.update(repr(tuple(r)).encode('utf-8'))
+        count += 1
+    return f'{count}:{h.hexdigest()[:16]}'
+
+
+def _day_version(conn: sqlite3.Connection, plan_date: str) -> str:
+    # Entry rows (membership, order, status) plus each task's updated_at
+    # (rename, priority, duration, reflection - also from another day).
+    return _digest(conn.execute(
+        "SELECT e.task_id, e.position, e.status, t.updated_at FROM day_plan_entry e "
+        "JOIN task t ON t.id = e.task_id WHERE e.plan_date = ? ORDER BY e.id",
+        (plan_date,),
+    ))
+
+
+def _backlog_version(conn: sqlite3.Connection) -> str:
+    # backlog_entry has no updated_at, so the rows themselves are the version.
+    return _digest(conn.execute(
+        "SELECT b.task_id, b.position, b.entered_on, t.updated_at FROM backlog_entry b "
+        "JOIN task t ON t.id = b.task_id ORDER BY b.task_id"
+    ))
+
+
+def day_version(plan_date: str) -> str:
+    with datastore.reader() as conn:
+        return _day_version(conn, plan_date)
+
+
+def backlog_version() -> str:
+    with datastore.reader() as conn:
+        return _backlog_version(conn)
+
+
+def load_day_for_edit(plan_date: str):
+    """(tasks, version) read in one snapshot, for the day view."""
+    with datastore.reader() as conn:
+        return _read_day_tasks(conn, plan_date), _day_version(conn, plan_date)
+
+
+def load_backlog_for_edit():
+    """(work, life, version) read in one snapshot, for the day view."""
+    with datastore.reader() as conn:
+        return (
+            _read_backlog(conn, TaskCategory.WORK),
+            _read_backlog(conn, TaskCategory.LIFE),
+            _backlog_version(conn),
+        )
+
+
 # ---------- save ----------
 
 class _Saver:
@@ -259,29 +371,48 @@ class _Saver:
 
     def run(self) -> None:
         req = self.req
-        today = _non_empty(req.today_tasks)
+        self._check_versions()
+        rewrite_today = req.today_tasks is not None
+        today = _non_empty(req.today_tasks) if rewrite_today else []
         rewrite_backlog = req.work_tasks is not None or req.life_tasks is not None
         work = _non_empty(req.work_tasks) if req.work_tasks is not None else None
         life = _non_empty(req.life_tasks) if req.life_tasks is not None else None
         all_tasks = today + (work or []) + (life or [])
 
-        self._build_reuse_pool(all_tasks)
+        self._build_reuse_pool(all_tasks, include_today=rewrite_today)
         for task in all_tasks:
             self._upsert_task(task)
 
-        self._save_today(today)
+        if rewrite_today:
+            self._save_today(today)
+            today_ids = {t.task_id for t in today}
+        else:
+            today_ids = set(self.prev_today)
         backlog_ids = self._save_backlog(work, life) if rewrite_backlog else set(self.prev_backlog)
-        self._soft_delete_dropped({t.task_id for t in today} | backlog_ids)
+        self._soft_delete_dropped(today_ids | backlog_ids)
         self.done_texts = self._mark_history_done()
-        self._enqueue_mirror(today, work, life)
+        self._enqueue_mirror(today if rewrite_today else None, work, life)
+
+    def _check_versions(self) -> None:
+        req = self.req
+        if req.expected_day_version is not None:
+            actual = _day_version(self.conn, req.plan_date)
+            if actual != req.expected_day_version:
+                raise ConflictError('day', req.expected_day_version, actual)
+        if req.expected_backlog_version is not None:
+            actual = _backlog_version(self.conn)
+            if actual != req.expected_backlog_version:
+                raise ConflictError('backlog', req.expected_backlog_version, actual)
 
     # A task saved earlier in this session may come back with task_id == 0
     # (e.g. restored from an undo snapshot taken before that save). Match it
     # by text to the same row it already had today / in the backlog instead
     # of inserting a duplicate.
-    def _build_reuse_pool(self, all_tasks: List[PlanTask]) -> None:
+    def _build_reuse_pool(self, all_tasks: List[PlanTask], include_today: bool = True) -> None:
         explicit = {t.task_id for t in all_tasks if t.task_id}
-        candidates = sorted(self.prev_today.items(), key=lambda kv: kv[1]['position'])
+        # When the day is not being rewritten its tasks stay where they are,
+        # so they must not be claimed by a backlog row with the same text.
+        candidates = sorted(self.prev_today.items(), key=lambda kv: kv[1]['position']) if include_today else []
         ids = [tid for tid, _ in candidates] + list(self.prev_backlog)
         self.reuse_pool: Dict[str, List[int]] = {}
         if not ids:
@@ -454,7 +585,8 @@ class _Saver:
             'plan_save',
             {
                 'date': req.plan_date,
-                'tasks': [t.to_dict() for t in today],
+                # None: the day's sheet is left untouched (backlog-only save).
+                'tasks': [t.to_dict() for t in today] if today is not None else None,
                 'original_in_progress': req.original_in_progress,
                 'work_tasks': [t.to_dict() for t in work] if work is not None else None,
                 'life_tasks': [t.to_dict() for t in life] if life is not None else None,

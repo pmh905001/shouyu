@@ -1,9 +1,7 @@
 import io
 import logging
 import os
-import tempfile
 import threading
-from datetime import datetime, timezone
 from functools import partial
 from typing import Optional
 
@@ -169,42 +167,19 @@ class Shortcut:
             return BaseCollector()
 
     @classmethod
-    @action_handler
     def show_status(cls):
-        """alt+/: show the last saved clipboard / screenshot / OCR record,
-        read from SQLite (no Excel load)."""
-        logging.info('show status')
-        from shouyu.service import note_store
-        from shouyu.view.msgbox import MessageBox
+        """alt+/: open (or close) the notes panel; the last saved record sits
+        right above its search box."""
+        logging.info('toggle notes panel')
+        from shouyu.view.qt_app import QtApp
 
-        note = note_store.last()
-        if note is None:
-            MessageBox.pop_up_message(title='上一条记录', msg='还没有记录')
-            return
-        title = f'上一条记录 · {cls._format_note_time(note.created_at)}'
-        image = note_store.image_bytes(note)
-        if image is not None:
-            # The toast shows asynchronously from a file path, so the file
-            # must outlive this call; one fixed path is overwritten each time.
-            path = os.path.join(tempfile.gettempdir(), 'shouyu_last_note.png')
-            with open(path, 'wb') as f:
-                f.write(image)
-            MessageBox.pop_up_message(title=title, msg='截图', image_path=path)
-        else:
-            MessageBox.pop_up_message(title=title, msg=note.text[:KbExcel.POPUP_MSG_LENGTH])
+        QtApp.toggle_notes_panel()
 
-    @staticmethod
-    def _format_note_time(created_at_utc: str) -> str:
-        """'2026-10-31T01:30:00.123Z' -> local '09:30:00', prefixed with the
-        date when it isn't today."""
-        try:
-            moment = datetime.strptime(created_at_utc, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
-        except ValueError:
-            return created_at_utc
-        local = moment.astimezone()
-        if local.strftime('%Y-%m-%d') == time.strftime('%Y-%m-%d'):
-            return local.strftime('%H:%M:%S')
-        return local.strftime('%Y-%m-%d %H:%M:%S')
+    @classmethod
+    def show_day_view(cls):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_day_view()
 
     @classmethod
     @action_handler
@@ -332,7 +307,8 @@ class Shortcut:
         cls._add_hot_key_from_config('ocr_capture', cls.ocr_capture)
         cls._add_hot_key_from_config('open_excel', cls.open_excel)
         cls._add_hot_key_from_config('close_excel', cls.close_excel, is_in_queue=False)
-        cls._add_hot_key_from_config('show_status', cls.show_status)
+        cls._add_hot_key_from_config('show_status', cls.show_status, is_in_queue=False)
+        cls._add_hot_key_from_config('show_day_view', cls.show_day_view, is_in_queue=False)
         cls._add_hot_key_from_config('one_or_multiple_cells_mode', cls.switch_one_or_multiple_cell_mode)
         cls._add_hot_key_from_config('show_todo', cls.show_todo_panel, is_in_queue=False)
         cls._add_hot_key_from_config('show_habits', cls.show_habit_dialog, is_in_queue=False)

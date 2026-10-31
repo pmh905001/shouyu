@@ -88,18 +88,21 @@ def _temp_image_path(message_id: int) -> str:
 def _dispatch_plan_save(kb_excel, payload: dict, attachment_bytes: Optional[bytes], image_path: str) -> None:
     from shouyu.service.plan import PlanTask, TaskCategory, TaskStatus
 
-    tasks = [PlanTask.from_dict(d) for d in (payload.get('tasks') or [])]
-    non_empty = [t for t in tasks if (t.text or '').strip()]
-    # `date` is the day the plan was saved for in SQLite; older messages
-    # without it mean "whatever today is when this is dispatched".
-    plan_date = payload.get('date')
-    plan = kb_excel.plan_service_for(plan_date, create=True) if plan_date else kb_excel.plan_service()
-    plan.write_plan_tasks(non_empty)
+    # `tasks` is None for a backlog-only save (day view's Backlog page): the
+    # day's sheet is not touched at all.
+    if payload.get('tasks') is not None:
+        tasks = [PlanTask.from_dict(d) for d in payload['tasks']]
+        non_empty = [t for t in tasks if (t.text or '').strip()]
+        # `date` is the day the plan was saved for in SQLite; older messages
+        # without it mean "whatever today is when this is dispatched".
+        plan_date = payload.get('date')
+        plan = kb_excel.plan_service_for(plan_date, create=True) if plan_date else kb_excel.plan_service()
+        plan.write_plan_tasks(non_empty)
 
-    original_in_progress = payload.get('original_in_progress')
-    new_in_progress = next((t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None)
-    if new_in_progress is not None and new_in_progress.text != original_in_progress:
-        plan.switch_in_progress(new_in_progress)
+        original_in_progress = payload.get('original_in_progress')
+        new_in_progress = next((t for t in non_empty if t.status == TaskStatus.IN_PROGRESS), None)
+        if new_in_progress is not None and new_in_progress.text != original_in_progress:
+            plan.switch_in_progress(new_in_progress)
 
     yesterday_done_rows = payload.get('yesterday_done_rows') or []
     yesterday_date = payload.get('yesterday_date')

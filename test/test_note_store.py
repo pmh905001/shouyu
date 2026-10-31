@@ -54,27 +54,16 @@ def test_purge_keeps_attachments_still_used_by_notes(db):
     assert db.execute("SELECT id FROM attachments").fetchone()[0] == note.attachment_id
 
 
-def test_show_status_reads_last_note(db, monkeypatch):
+def test_show_status_toggles_the_notes_panel(monkeypatch):
+    """alt+/ opens the notes panel (REC-01); the panel itself is tested in
+    test_notes_panel.py."""
     from shouyu.action.shortcut import Shortcut
-    from shouyu.view.msgbox import MessageBox
+    from shouyu.view.qt_app import QtApp
 
-    shown = []
-    monkeypatch.setattr(MessageBox, 'pop_up_message', classmethod(lambda cls, **kw: shown.append(kw)))
-
+    calls = []
+    monkeypatch.setattr(QtApp, 'toggle_notes_panel', classmethod(lambda cls: calls.append('toggle')))
     Shortcut.show_status()
-    assert shown[-1]['msg'] == '还没有记录'
-
-    note_store.save(text='x' * 300)
-    Shortcut.show_status()
-    assert shown[-1]['title'].startswith('上一条记录 · ')
-    assert shown[-1]['msg'] == 'x' * 100
-
-    png = _png()
-    note_store.save(image_png=png)
-    Shortcut.show_status()
-    assert shown[-1]['msg'] == '截图'
-    with open(shown[-1]['image_path'], 'rb') as f:
-        assert f.read() == png
+    assert calls == ['toggle']
 
 
 def test_clipboard_hotkey_saves_note(db, monkeypatch):
@@ -92,9 +81,3 @@ def test_clipboard_hotkey_saves_note(db, monkeypatch):
     assert (last.text, last.excel_column, last.source) == ('剪贴板内容', 'A', 'clipboard')
     assert toasts == [('已记录', '剪贴板内容')]
 
-
-def test_format_note_time():
-    from shouyu.action.shortcut import Shortcut
-
-    assert Shortcut._format_note_time('2020-01-02T03:04:05.000Z').startswith('2020-01-02 ')
-    assert Shortcut._format_note_time('garbage') == 'garbage'

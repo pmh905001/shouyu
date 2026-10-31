@@ -12,7 +12,7 @@ import sys
 import threading
 from typing import List, Optional
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 
@@ -26,7 +26,36 @@ class _QtBridge(QObject):
     save_status_signal = Signal(str, str, str)  # (level, title, message)
     crash_notice_signal = Signal(str)
     ocr_capture_signal = Signal(str)  # payload = target column, or ""
+    toggle_notes_panel_signal = Signal()
+    show_day_view_signal = Signal(str)  # payload = YYYY-MM-DD, or "" for today
     quit_signal = Signal()
+
+    @Slot()
+    def _on_toggle_notes_panel(self) -> None:
+        try:
+            from shouyu.view.notes_panel import NotesPanel
+
+            NotesPanel.get_or_create().toggle()
+        except Exception:
+            logging.exception("failed to toggle notes panel")
+
+    @Slot()
+    def _prewarm_notes_panel(self) -> None:
+        try:
+            from shouyu.view.notes_panel import NotesPanel
+
+            NotesPanel.get_or_create()
+        except Exception:
+            logging.exception("failed to prepare notes panel")
+
+    @Slot(str)
+    def _on_show_day_view(self, plan_date: str) -> None:
+        try:
+            from shouyu.view.day_view import DayView
+
+            DayView.get_or_create().open_date(plan_date or None)
+        except Exception:
+            logging.exception("failed to show day view")
 
     @Slot()
     def _on_show_todo(self) -> None:
@@ -194,7 +223,12 @@ class QtApp:
             cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
             cls._bridge.crash_notice_signal.connect(cls._bridge._on_crash_notice, Qt.QueuedConnection)
             cls._bridge.ocr_capture_signal.connect(cls._bridge._on_ocr_capture, Qt.QueuedConnection)
+            cls._bridge.toggle_notes_panel_signal.connect(cls._bridge._on_toggle_notes_panel, Qt.QueuedConnection)
+            cls._bridge.show_day_view_signal.connect(cls._bridge._on_show_day_view, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
+            # The notes panel stays resident; building it ahead of the first
+            # alt+/ keeps that first open within REC-16's 0.3 s.
+            QTimer.singleShot(3000, cls._bridge._prewarm_notes_panel)
         finally:
             cls._ready.set()
 
@@ -287,6 +321,20 @@ class QtApp:
             logging.warning("Qt bridge not ready; cannot start OCR capture")
             return
         cls._bridge.ocr_capture_signal.emit(column or "")
+
+    @classmethod
+    def toggle_notes_panel(cls) -> None:
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot toggle notes panel")
+            return
+        cls._bridge.toggle_notes_panel_signal.emit()
+
+    @classmethod
+    def show_day_view(cls, plan_date: str = "") -> None:
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot show day view")
+            return
+        cls._bridge.show_day_view_signal.emit(plan_date or "")
 
     @classmethod
     def quit(cls) -> None:

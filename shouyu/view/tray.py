@@ -36,6 +36,8 @@ class Tray:
             MenuItem(text='设置', action=cls.on_config),
             MenuItem(text='打开工作目录', action=cls.on_open_work_dir),
             MenuItem(text='今日任务', action=cls.on_show_todo),
+            MenuItem(text='记录面板', action=cls.on_show_notes_panel),
+            MenuItem(text='日视图', action=cls.on_show_day_view),
             MenuItem(text='番茄: 启停', action=cls.on_toggle_pomodoro),
             MenuItem(text='番茄: 暂停/继续', action=cls.on_pause_resume_pomodoro),
             MenuItem(text='番茄: 显示/隐藏', action=cls.on_toggle_pomodoro_visible),
@@ -88,6 +90,18 @@ class Tray:
         from shouyu.view.qt_app import QtApp
 
         QtApp.show_todo_panel()
+
+    @classmethod
+    def on_show_notes_panel(cls, icon, item):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.toggle_notes_panel()
+
+    @classmethod
+    def on_show_day_view(cls, icon, item):
+        from shouyu.view.qt_app import QtApp
+
+        QtApp.show_day_view()
 
     @classmethod
     def on_toggle_pomodoro(cls, icon, item):

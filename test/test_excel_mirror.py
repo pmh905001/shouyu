@@ -77,6 +77,21 @@ def test_history_done_mark_reaches_excel(db, v2env):
     assert [t.status for t in PlanService(wb[yesterday]).read_plan_tasks()] == [TaskStatus.DONE]
 
 
+def test_backlog_only_save_does_not_touch_the_day_sheet(db, v2env):
+    """Day view's Backlog page saves with today_tasks=None."""
+    today = _today()
+    task_store.save_plan(PlanSaveRequest(plan_date=today, today_tasks=[PlanTask('当天的任务')], work_tasks=[]))
+    _drain(db)
+    task_store.save_plan(PlanSaveRequest(
+        plan_date=today, today_tasks=None, work_tasks=[PlanTask('新的 backlog')], life_tasks=[],
+    ))
+    _drain(db)
+
+    wb = openpyxl.load_workbook(v2env['excel_path'])
+    assert [t.text for t in PlanService(wb[today]).read_plan_tasks()] == ['当天的任务']
+    assert [t.text for t in BacklogService(wb[BACKLOG_SHEET_WORK], TaskCategory.WORK).read()] == ['新的 backlog']
+
+
 def test_excel_edits_are_not_read_back(db, v2env):
     """PLN-03: SQLite is the source of truth; Excel is display only."""
     today = _today()
