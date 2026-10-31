@@ -528,10 +528,24 @@ class KbExcel:
     def plan_service(self) -> PlanService:
         return PlanService(self._active_worksheet)
 
-    def plan_service_for(self, date_str: str):
-        """Return a PlanService bound to <date_str>'s worksheet, or None if it doesn't exist."""
-        if not date_str or date_str not in self._workbook.sheetnames:
+    def plan_service_for(self, date_str: str, create: bool = False):
+        """Return a PlanService bound to <date_str>'s worksheet.
+
+        Returns None if the sheet doesn't exist, unless `create` is set: then
+        today's date goes through the normal today-sheet path, and any other
+        date gets a freshly seeded sheet."""
+        if not date_str:
             return None
+        if date_str == self._worksheet_name:
+            if create or date_str in self._workbook.sheetnames:
+                return self.plan_service()
+            return None
+        if date_str not in self._workbook.sheetnames:
+            if not create:
+                return None
+            worksheet = self._workbook.create_sheet(date_str)
+            PlanService(worksheet).seed_default_plan()
+            self._changed = True
         return PlanService(self._workbook[date_str])
 
     def backlog_service(self, category: TaskCategory) -> BacklogService:
@@ -588,16 +602,25 @@ class KbExcel:
         Used by pomodoro and other auto-loggers that should not pop up message boxes.
         Returns the anchor written to.
         """
+        anchor = self.stage_detail(text, column=column)
+        if anchor:
+            self._save_changed()
+        return anchor
+
+    def stage_detail(self, text: str, column: str = 'B', date_str: Optional[str] = None) -> str:
+        """Same placement as `append_detail()` but only edits the in-memory
+        workbook, so the queue dispatcher can save it together with the rest
+        of its batch. `date_str` targets another day's sheet (created if
+        missing). Returns the anchor written to."""
         if not text:
             return ''
-        plan = self.plan_service()
+        plan = self.plan_service_for(date_str, create=True) if date_str else self.plan_service()
         last_used = plan.last_used_row_in_active_area()
         start = plan.active_area_start_row()
         target_row = max(last_used + 1, start)
         anchor = f'{column}{target_row}'
-        self._active_worksheet[anchor] = text
+        plan.ws[anchor] = text
         self._changed = True
-        self._save_changed()
         return anchor
 
     def force_save(self) -> None:

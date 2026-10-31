@@ -47,6 +47,14 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-10-31
+
+- **任务、番茄、剪贴板记录改为以 SQLite 为主**：晨间仪式窗口、今日任务面板、番茄钟、`alt+/` 只读写 v2 的 `shouyu_v2.db`，不再读 Excel。Excel 被占用时保存也立即生效；打开窗口从约 2 秒降到几毫秒。任务有了身份，结转、在 Backlog 和今日之间移动后仍是同一个任务，并记录每次状态变化的时间。（`shouyu/service/datastore.py`、`shouyu/service/task_store.py`、`shouyu/service/note_store.py`、`shouyu/service/message_queue.py`、`shouyu/view/habit_dialog.py`、`shouyu/view/todo_panel.py`、`shouyu/service/pomodoro.py`、`shouyu/action/shortcut.py`、`shouyu/service/plan.py`、`main.py`）
+- **Excel 改为同步展示**：SQLite 保存成功后，经现有队列把计划区、两类 Backlog、🍅 行、"其他"区域、历史日期的"已完成"同步写到 Excel；`kb.ini` 新增 `excel_mirror` 开关。（`shouyu/service/dispatch.py`、`shouyu/service/excel.py`、`shouyu/config.py`、`kb.ini`）
+- **首次启动导入 Excel 历史**：后台把已有的每日任务、两类 Backlog、番茄记录导入 SQLite，重复导入不产生重复数据；导入期间晨间仪式窗口不可编辑。（`shouyu/service/task_import.py`、`shouyu/view/habit_dialog.py`、`main.py`）
+- **今日任务面板撤销后丢失工作/生活分类**：撤销快照现在保留分类、创建日期和任务身份。（`shouyu/view/todo_panel.py`）
+- **新增 v2 数据层测试**：存取、结转、导入、Excel 同步、番茄、`alt+/`、两个窗口的离屏流程。（`test/conftest.py`、`test/test_task_store.py`、`test/test_note_store.py`、`test/test_task_import.py`、`test/test_excel_mirror.py`、`test/test_pomodoro_store.py`、`test/test_plan_windows.py`、`.gitignore`）
+
 ## 2026-10-21
 
 - **修复 Ctrl+Alt+H 习惯窗口长时间卡死、随后无响应崩溃**：根因是 `plan.py` 的 `count_pomodoros_logged()` 在逐行循环里每次都调用 openpyxl 的 `max_column`（会遍历整张表的全部单元格），复杂度为「行数 × 单元格数」；而 `_select_latest_history_day()` 又对最近 30 天逐日调用它，实测刷新一次耗时约 262 秒，期间 UI 线程被阻塞。修复后列数只解析一次（`iter_rows` 按列上限读取，结果与旧实现一致），刷新耗时降至约 2 秒。（`shouyu/service/plan.py`）

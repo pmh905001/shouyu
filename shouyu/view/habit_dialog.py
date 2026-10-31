@@ -281,88 +281,17 @@ def _card_qss(bg_hex: str) -> str:
     return f"QFrame#Card {{ background-color: {bg_hex}; border-radius: 10px; }}"
 
 
-def _enqueue_plan_save(
-    tasks_snapshot: List[PlanTask],
-    original_in_progress: Optional[str],
-    yesterday_done_rows: Optional[List[int]] = None,
-    yesterday_date: Optional[str] = None,
-    work_snapshot: Optional[List[PlanTask]] = None,
-    life_snapshot: Optional[List[PlanTask]] = None,
-) -> None:
-    """Enqueue today's plan onto the durable message queue and return
-    immediately; the shared background dispatcher (service/dispatch.py) does
-    the actual Excel write, including all lock-retry handling. See
-    docs/excel-save-resilience.md.
-
-    `yesterday_done_rows`: plan-area row numbers in *yesterday's* worksheet
-    that the user just marked as DONE via the carry-over card. We capture
-    "yesterday" (`yesterday_date`) right now rather than at dispatch time,
-    because dispatch can be delayed (Excel locked) past midnight, at which
-    point `AppState.yesterday_str()` would no longer mean the day the user
-    actually meant.
-
-    NOTE: reflections live alongside each task (PlanTask.reflection -> plan
-    sheet column E) now, so there is no separate `reflection_text` channel.
-    """
-    from shouyu.service import dispatch, message_queue
-
-    payload = {
-        "tasks": [t.to_dict() for t in tasks_snapshot],
-        "original_in_progress": original_in_progress,
-        "yesterday_done_rows": list(yesterday_done_rows) if yesterday_done_rows else [],
-        "yesterday_date": yesterday_date if yesterday_done_rows else None,
-        "work_tasks": [t.to_dict() for t in work_snapshot] if work_snapshot is not None else None,
-        "life_tasks": [t.to_dict() for t in life_snapshot] if life_snapshot is not None else None,
-    }
-    message_queue.enqueue("plan_save", payload)
-    dispatch.notify_recorded("今日任务已记录", "后台同步中，Excel 被占用也不会丢失")
-    dispatch.kick()
-
-
-def _read_day_snapshot(date_str: str, excel=None) -> dict:
-    """Read unfinished tasks and summary data from one dated worksheet."""
-    out = {
-        "date": date_str,
-        "unfinished": [],
-        "done": 0,
-        "total": 0,
-        "pomodoros": 0,
-    }
+def _read_day_snapshot(date_str: str) -> dict:
+    """Unfinished tasks and summary counts for one earlier day, from SQLite.
+    Unfinished tasks keep their `task_id`, so carrying one over keeps the
+    same task, and marking one done updates that day's entry."""
     try:
-        from shouyu.service.excel import KbExcel
+        from shouyu.service import task_store
 
-        excel = excel or KbExcel()
-        plan = excel.plan_service_for(date_str)
-        if plan is None:
-            return out
-        tasks = plan.read_plan_tasks()
-        out["total"] = len(tasks)
-        out["done"] = sum(1 for t in tasks if t.status == TaskStatus.DONE)
-        # NOTE: we deliberately preserve `row` here so the carry-over UI can
-        # later mark a yesterday task as DONE in the original worksheet via
-        # PlanService.mark_plan_done(row).
-        out["unfinished"] = [
-            PlanTask(
-                text=t.text,
-                status=TaskStatus.PENDING,
-                row=t.row,
-                duration_minutes=t.duration_minutes,
-                priority=t.priority,
-                reflection=t.reflection,
-                category=t.category,
-            )
-            for t in tasks
-            if t.status != TaskStatus.DONE
-        ]
-        out["pomodoros"] = plan.count_pomodoros_logged()
+        return task_store.load_day(date_str).as_dict()
     except Exception:
         logging.exception("failed to read day snapshot: %s", date_str)
-    return out
-
-
-def _read_yesterday_snapshot() -> dict:
-    """Backward-compatible wrapper for callers that still mean yesterday."""
-    return _read_day_snapshot(AppState.yesterday_str())
+        return {"date": date_str, "unfinished": [], "done": 0, "total": 0, "pomodoros": 0}
 
 
 class HabitDialog(QDialog):
@@ -402,7 +331,7 @@ class HabitDialog(QDialog):
         self._window_maximized = True
         self._normal_geometry: Optional[QRect] = None
         self._native_snap_enabled = False
-        # Snapshot of the plan state right after the last load from Excel.
+        # Snapshot of the plan state right after the last load (or save).
         # Used by `_has_unsaved_changes` so Esc / 关闭 can warn the user before
         # silently dropping their edits.
         self._initial_tasks_snapshot: List[tuple] = []
@@ -416,13 +345,21 @@ class HabitDialog(QDialog):
         # already has on today's list). Kept aligned 1-to-1 with
         # _yesterday_checkboxes so `_carry_over_now` can pair them via zip().
         self._visible_yesterday: List[PlanTask] = []
-        # Yesterday rows the user just marked as DONE (because they forgot to
-        # tick them yesterday). The row numbers are persisted via
-        # PlanService.mark_plan_done() during the next save. Tracking them
-        # also lets `_has_unsaved_changes` flag this kind of edit.
-        self._yesterday_marked_done_rows: set = set()
+        # task_ids of history-day tasks the user just marked as DONE (because
+        # they forgot to tick them that day). Persisted on the next save.
+        # Tracking them also lets `_has_unsaved_changes` flag this kind of edit.
+        self._yesterday_marked_done_ids: set = set()
         # Today's logged pomodoro count, cached by refresh_plan_from_excel().
         self._today_pomodoros = 0
+        # Local date the dialog was opened for; saves go to this day even if
+        # the dialog stays open past midnight.
+        self._plan_date = AppState.today_str()
+        # True while the one-time Excel history import is still running: the
+        # editors are disabled and saving is skipped until it finishes.
+        self._importing = False
+        self._import_poll_timer = QTimer(self)
+        self._import_poll_timer.setInterval(500)
+        self._import_poll_timer.timeout.connect(self._poll_import_finished)
         # Cache of the latest snapshot dict passed into _render_yesterday so
         # we can re-render after today-list mutations without re-reading Excel.
         self._yesterday_snap: dict = {
@@ -458,44 +395,31 @@ class HabitDialog(QDialog):
         self._render_habits()
 
     def refresh_plan_from_excel(self) -> None:
-        from shouyu.service.excel import KbExcel
+        """Load everything the dialog shows. Despite the (kept) name, this
+        reads SQLite only; Excel is just a mirrored display copy."""
+        from shouyu.service import task_import, task_store
 
         # Commit any half-typed edit into the *current* lists before they are
         # replaced below; otherwise it would land on the wrong reloaded row.
         self._close_inline_editors()
-        excel = None
+        self._plan_date = AppState.today_str()
+        self._set_importing(task_import.is_running())
+        data = None
         try:
-            excel = KbExcel()
-            tasks = excel.plan_service().read_plan_tasks()
+            data = task_store.load_dialog(self._plan_date)
         except Exception:
-            logging.exception("failed to read plan from Excel")
-            tasks = []
+            logging.exception("failed to load today's plan from SQLite")
 
-        # Pomodoro count for today's recap. Computed here, while the workbook is
-        # already loaded, instead of re-reading Excel on every _update_stats().
-        self._today_pomodoros = 0
-        if excel is not None:
-            try:
-                self._today_pomodoros = excel.plan_service().count_pomodoros_logged()
-            except Exception:
-                logging.exception("failed to count today's pomodoros")
-
-        self._tasks = tasks
-        in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
+        self._tasks = data.today_tasks if data else []
+        # Cached for the day-end recap instead of re-querying on every _update_stats().
+        self._today_pomodoros = data.today_pomodoros if data else 0
+        in_progress = next((t for t in self._tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
 
-        # Backlog pools (cross-day). Read on every open so the two sections
-        # reflect the on-disk pool; the in-memory copy is the working set until
-        # the next save (same open-time-snapshot model as the plan area).
-        try:
-            if excel is None:
-                excel = KbExcel()
-            self._work_tasks = excel.backlog_service(TaskCategory.WORK).read()
-            self._life_tasks = excel.backlog_service(TaskCategory.LIFE).read()
-        except Exception:
-            logging.exception("failed to read backlog from Excel")
-            self._work_tasks = []
-            self._life_tasks = []
+        # Backlog pools (cross-day). The in-memory copy is the working set
+        # until the next save (same open-time-snapshot model as the plan area).
+        self._work_tasks = data.work_tasks if data else []
+        self._life_tasks = data.life_tasks if data else []
 
         # Capture the just-loaded state so we can detect unsaved edits later.
         self._initial_tasks_snapshot = self._snapshot_tasks(self._tasks)
@@ -514,9 +438,29 @@ class HabitDialog(QDialog):
         self._update_stats()
 
         # Carry-over history & streak: cheap enough to fetch on every open.
-        self._yesterday_marked_done_rows = set()
-        self._select_latest_history_day(excel)
+        self._yesterday_marked_done_ids = set()
+        self._select_latest_history_day(data.history.as_dict() if data else None)
         self._render_streak()
+
+    def _set_importing(self, importing: bool) -> None:
+        self._importing = importing
+        self.import_label.setVisible(importing)
+        self.body_splitter.setEnabled(not importing)
+        self.start_btn.setEnabled(not importing)
+        if importing:
+            self._import_poll_timer.start()
+        else:
+            self._import_poll_timer.stop()
+
+    def _poll_import_finished(self) -> None:
+        from shouyu.service import task_import
+
+        if task_import.is_running():
+            return
+        self._import_poll_timer.stop()
+        # Nothing could be edited while importing, so reloading loses nothing.
+        self.refresh_plan_from_excel()
+        self._reset_action_buttons()
 
     def show_fullscreen(self) -> None:
         """Open the dialog full-screen but respect the Windows taskbar.
@@ -648,7 +592,13 @@ class HabitDialog(QDialog):
         outer.addLayout(self._build_header_row())
         outer.addLayout(self._build_secondary_header_row())
 
+        self.import_label = QLabel("⏳ 正在从 Excel 导入任务历史……导入完成后会自动刷新，在此之前不能编辑。")
+        self.import_label.setStyleSheet("color: #FFB454; font-size: 14px; font-weight: 600;")
+        self.import_label.setVisible(False)
+        outer.addWidget(self.import_label)
+
         body = QSplitter(Qt.Horizontal)
+        self.body_splitter = body
         body.setHandleWidth(2)
         body.setChildrenCollapsible(False)
         body.addWidget(self._build_habit_card())
@@ -1253,30 +1203,15 @@ class HabitDialog(QDialog):
     def _select_history_offset(self, days: int) -> None:
         self._select_history_date(self._date_days_ago(days))
 
-    def _select_latest_history_day(self, excel=None) -> None:
-        """Pick the nearest previous worksheet that contains tasks.
+    def _select_latest_history_day(self, snapshot: Optional[dict] = None) -> None:
+        """Show the nearest earlier day (within 30 days) that has tasks.
 
-        Reuses the workbook already loaded by refresh_plan_from_excel(): every
-        KbExcel() construction re-parses the whole (large) workbook, so loading
-        it once per candidate day froze the UI for minutes.
-        """
-        today = AppState.today_str()
-        selected = self._date_days_ago(1)
-        try:
-            from shouyu.service.excel import KbExcel
-
-            excel = excel or KbExcel()
-            for days in range(1, 31):
-                candidate = self._date_days_ago(days)
-                snapshot = _read_day_snapshot(candidate, excel)
-                if snapshot["total"] > 0:
-                    selected = candidate
-                    break
-        except Exception:
-            logging.exception("failed to find latest history day")
-        self._select_history_date(selected, excel)
-        if selected == today:
-            self.history_label.setText("没有可用的历史日期")
+        `snapshot` is the one task_store.load_dialog() already picked, so
+        opening the dialog costs no extra queries; without it (load failed)
+        fall back to yesterday."""
+        if snapshot is None:
+            snapshot = _read_day_snapshot(self._date_days_ago(1))
+        self._select_history_date(snapshot["date"], snapshot)
 
     def _select_history_custom_date(self) -> None:
         default = self._selected_history_date or self._date_days_ago(1)
@@ -1299,10 +1234,11 @@ class HabitDialog(QDialog):
             return
         self._select_history_date(date_text)
 
-    def _select_history_date(self, date_str: str, excel=None) -> None:
+    def _select_history_date(self, date_str: str, snapshot: Optional[dict] = None) -> None:
         self._selected_history_date = date_str
-        self._yesterday_marked_done_rows = set()
-        snapshot = _read_day_snapshot(date_str, excel)
+        self._yesterday_marked_done_ids = set()
+        if snapshot is None:
+            snapshot = _read_day_snapshot(date_str)
         self._yesterday_unfinished = list(snapshot["unfinished"])
         self._render_yesterday(snapshot)
 
@@ -1439,7 +1375,7 @@ class HabitDialog(QDialog):
 
             done_btn = QPushButton("✓ 已完成")
             done_btn.setToolTip(
-                "把这条历史任务标记为「已完成」（保存后写回对应日期的工作表）"
+                "把这条历史任务标记为「已完成」（保存后写回对应日期）"
             )
             done_btn.setAutoDefault(False)
             done_btn.setCursor(Qt.PointingHandCursor)
@@ -1449,12 +1385,11 @@ class HabitDialog(QDialog):
             done_btn.clicked.connect(
                 lambda _checked=False, t=task: self._mark_yesterday_done(t)
             )
-            # If the task didn't carry a row (shouldn't normally happen — read
-            # via PlanService always populates row), hide the button to avoid
-            # silently doing nothing.
-            if not task.row:
+            # Tasks read from SQLite always carry a task_id; disable the
+            # button rather than silently doing nothing if one doesn't.
+            if not task.task_id:
                 done_btn.setEnabled(False)
-                done_btn.setToolTip("（无法定位到历史工作表的对应行）")
+                done_btn.setToolTip("（无法定位到这条历史任务）")
             row.addWidget(done_btn)
 
             self.carryover_layout.addLayout(row)
@@ -1698,6 +1633,7 @@ class HabitDialog(QDialog):
                 reflection=t.reflection,
                 category=t.category,
                 created_date=t.created_date,
+                task_id=t.task_id,
             )
             for t in tasks
         ]
@@ -1981,18 +1917,17 @@ class HabitDialog(QDialog):
         """Tag a yesterday task as DONE — for the common case where the user
         actually finished it but forgot to tick the box yesterday.
 
-        We only stage the change in memory here. The actual write to
-        yesterday's worksheet happens via `_enqueue_plan_save` so the edit
-        rides along with the rest of the save path's durability guarantees.
+        We only stage the change in memory here. The actual write happens in
+        the same save transaction as the rest of the dialog's edits.
         """
-        if not task.row:
+        if not task.task_id:
             return  # defensive — button should already be disabled in this case
-        self._yesterday_marked_done_rows.add(task.row)
+        self._yesterday_marked_done_ids.add(task.task_id)
         # Drop the task from today's carry-over view so it stops nagging the
-        # user. We match by row (unique within the day) rather than text so
+        # user. Match by task_id (unique within the day) rather than text so
         # duplicates with the same name don't both disappear.
         self._yesterday_unfinished = [
-            t for t in self._yesterday_unfinished if t.row != task.row
+            t for t in self._yesterday_unfinished if t.task_id != task.task_id
         ]
         self._render_yesterday(self._yesterday_snap)
         self._update_stats()
@@ -2025,6 +1960,8 @@ class HabitDialog(QDialog):
         added = 0
         for task in will_add:
             text = (task.text or "").strip()
+            # Same task_id: the carried-over task stays the same task (one
+            # row in `task`, one plan entry per day it appears on).
             self._tasks.append(
                 PlanTask(
                     text=task.text,
@@ -2033,6 +1970,7 @@ class HabitDialog(QDialog):
                     priority=task.priority,
                     reflection=task.reflection,
                     category=task.category,
+                    task_id=task.task_id,
                 )
             )
             existing_texts.add(text)
@@ -2502,7 +2440,7 @@ class HabitDialog(QDialog):
         self.review_label.setVisible(True)
 
     def _reset_action_buttons(self) -> None:
-        self.start_btn.setEnabled(True)
+        self.start_btn.setEnabled(not self._importing)
         self.start_btn.setText("开始今天 (Ctrl+Enter)")
         self.skip_btn.setEnabled(True)
 
@@ -2510,6 +2448,15 @@ class HabitDialog(QDialog):
 
     def _save_and_accept(self) -> None:
         if self._closing:
+            return
+        if self._importing:
+            from shouyu.view.msgbox import MessageBox, MessageType
+
+            MessageBox.pop_up_message(
+                "正在导入",
+                "正在从 Excel 导入任务历史，导入完成后会自动刷新，再保存。",
+                level=MessageType.ERROR,
+            )
             return
         self._closing = True
 
@@ -2527,38 +2474,55 @@ class HabitDialog(QDialog):
         try:
             self._dispatch_save()
         except Exception:
-            logging.exception("failed to enqueue today's plan save")
+            logging.exception("failed to save today's plan")
             self._closing = False
             self._reset_action_buttons()
             from shouyu.view.msgbox import MessageBox, MessageType
 
             MessageBox.pop_up_message(
                 "保存失败",
-                "任务没有成功加入保存队列，请查看 kb.log 后重试。",
+                "任务没有保存成功，请查看 kb.log 后重试。",
                 level=MessageType.ERROR,
             )
             return
-        # accept() triggers closeEvent; skip its second dispatch of the same
-        # snapshot. Duplicate queue entries were a major source of races
-        # after Ctrl+Enter.
+        # accept() triggers closeEvent; skip its second save of the same state.
         self._skip_save_on_close = True
         QTimer.singleShot(0, self.accept)
 
     def _dispatch_save(self) -> None:
-        # Previously this short-circuited via a `_save_already_dispatched`
-        # flag — that meant any second call (e.g. close-after-focus-pomodoro)
-        # silently dropped subsequent edits. Each dispatch enqueues a fresh
-        # durable message; the background dispatcher applies them in order.
-        tasks_snapshot = self._clone_tasks(self._tasks)
-        yesterday_done_rows = sorted(self._yesterday_marked_done_rows)
-        _enqueue_plan_save(
-            tasks_snapshot,
-            self._original_in_progress,
-            yesterday_done_rows,
-            yesterday_date=self._selected_history_date,
-            work_snapshot=self._clone_tasks(self._work_tasks),
-            life_snapshot=self._clone_tasks(self._life_tasks),
+        """Save all three lists (and history-day done marks) to SQLite in one
+        transaction; Excel gets a mirrored copy through the queue. Raises on
+        failure. Skipped while the Excel import is running (nothing can be
+        edited then).
+
+        The live PlanTask objects are passed (not clones) so new tasks get
+        their task_id back: a later save from the same open dialog (e.g.
+        "专注此项" then close) updates them instead of inserting duplicates."""
+        if self._importing:
+            return
+        from shouyu.service import dispatch, task_store
+
+        task_store.save_plan(
+            task_store.PlanSaveRequest(
+                plan_date=self._plan_date,
+                today_tasks=self._tasks,
+                original_in_progress=self._original_in_progress,
+                work_tasks=self._work_tasks,
+                life_tasks=self._life_tasks,
+                history_date=self._selected_history_date,
+                history_done_task_ids=sorted(self._yesterday_marked_done_ids),
+            )
         )
+        # What is on disk now is the new baseline for unsaved-change checks.
+        in_progress = next((t for t in self._tasks if t.status == TaskStatus.IN_PROGRESS), None)
+        self._original_in_progress = in_progress.text if in_progress else None
+        self._initial_tasks_snapshot = self._snapshot_tasks(self._tasks)
+        self._initial_backlog_snapshot = (
+            self._snapshot_tasks(self._work_tasks),
+            self._snapshot_tasks(self._life_tasks),
+        )
+        self._yesterday_marked_done_ids = set()
+        dispatch.notify_recorded("今日任务已保存", "已保存到本地数据库")
 
     # ---------- unsaved-change detection ----------
 
@@ -2593,7 +2557,7 @@ class HabitDialog(QDialog):
         )
         if current_backlog != self._initial_backlog_snapshot:
             return True
-        if self._yesterday_marked_done_rows:
+        if self._yesterday_marked_done_ids:
             return True
         return False
 
@@ -2616,7 +2580,18 @@ class HabitDialog(QDialog):
             # Same path as Ctrl+Enter — but we still want reject() semantics
             # afterwards (the morning ritual is "skipped" for streak purposes
             # only via _save_and_accept, so we mimic just the save half here).
-            self._dispatch_save()
+            try:
+                self._dispatch_save()
+            except Exception:
+                logging.exception("failed to save today's plan")
+                from shouyu.view.msgbox import MessageBox, MessageType
+
+                MessageBox.pop_up_message(
+                    "保存失败",
+                    "任务没有保存成功，请查看 kb.log 后重试。",
+                    level=MessageType.ERROR,
+                )
+                return
             super().reject()
         elif clicked is discard_btn:
             self._skip_save_on_close = True
@@ -2691,7 +2666,15 @@ class HabitDialog(QDialog):
             try:
                 self._dispatch_save()
             except Exception:
-                logging.exception("failed to enqueue plan save while closing")
+                logging.exception("failed to save plan while closing")
+                from shouyu.view.msgbox import MessageBox, MessageType
+
+                MessageBox.pop_up_message(
+                    "保存失败",
+                    "关闭时任务没有保存成功，请查看 kb.log。",
+                    level=MessageType.ERROR,
+                )
+        self._import_poll_timer.stop()
         event.accept()
 
 

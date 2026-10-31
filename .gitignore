@@ -16,6 +16,9 @@ shouyu_state.json
 shouyu.db
 shouyu.db-wal
 shouyu.db-shm
+shouyu_v2.db
+shouyu_v2.db-wal
+shouyu_v2.db-shm
 attachments/
 *.unsaved_*.xlsx
 *_backup_*.xlsx

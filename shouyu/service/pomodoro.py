@@ -133,6 +133,7 @@ class PomodoroService:
         self._completed_today = 0
         self._current_task_text = ""
         self._current_task_started_at: Optional[float] = None
+        self._planning_started_at: Optional[float] = None
         self._task_text_override: Optional[str] = None
         self._timer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -233,7 +234,7 @@ class PomodoroService:
     def set_current_task(self, task_text: Optional[str]) -> None:
         """Update which task the current phase is attributed to WITHOUT touching
         the timer (no reset). Pass an explicit string (``""`` clears the label);
-        pass ``None`` to re-read the in-progress task from the daily sheet.
+        pass ``None`` to re-read the in-progress task from today's plan.
         Emits a ``task_changed`` event so the floating window refreshes its
         task label in place."""
         with self._state_lock:
@@ -448,6 +449,7 @@ class PomodoroService:
         with self._state_lock:
             phase = self._phase
         if phase == Phase.PLANNING:
+            self._record_planning_completion(ended_early=True)
             self._begin_phase(
                 Phase.SHORT_BREAK,
                 duration_override=Config.pomodoro_planning_break_minutes() * 60,
@@ -588,6 +590,8 @@ class PomodoroService:
                 self._current_task_started_at = time.time()
                 # Fresh focus block -> reset the drift budget.
                 self._current_phase_drifts = 0
+            elif phase == Phase.PLANNING:
+                self._planning_started_at = time.time()
             self._spawn_timer_thread_locked()
         self._persist_session(force=True)
         self._emit(
@@ -645,15 +649,11 @@ class PomodoroService:
             self._task_text_override = None
             return
 
-        from shouyu.service.excel import KbExcel
+        from shouyu.service import task_store
 
         try:
-            excel = KbExcel()
-            entry = excel.plan_service().current_in_progress_entry()
-            if entry is not None:
-                self._current_task_text = entry.text
-            else:
-                self._current_task_text = ""
+            task = task_store.current_in_progress(time.strftime("%Y-%m-%d"))
+            self._current_task_text = task.text if task is not None else ""
         except Exception:
             logging.exception("failed to read current in-progress task")
             self._current_task_text = ""
@@ -683,6 +683,7 @@ class PomodoroService:
     def _on_phase_finished(self, finished_phase: Phase) -> None:
         _beep_async()
         if finished_phase == Phase.PLANNING:
+            self._record_planning_completion(ended_early=False)
             # Planning done -> short planning break, then normal work.
             self._begin_phase(
                 Phase.SHORT_BREAK,
@@ -703,7 +704,7 @@ class PomodoroService:
             self._begin_phase(Phase.WORKING)
 
     def _record_pomodoro_completion(self, actual_minutes: Optional[int] = None) -> None:
-        from shouyu.service.excel import KbExcel
+        from shouyu.service import task_store
 
         try:
             now = time.time()
@@ -716,14 +717,47 @@ class PomodoroService:
             # For an early finish we log the real elapsed minutes; a natural
             # completion logs the configured duration.
             logged_min = actual_minutes if actual_minutes is not None else duration_min
-            label = (
-                f"🍅 {logged_min}min @"
-                f"{time.strftime('%H:%M', time.localtime(started_at))}-"
-                f"{time.strftime('%H:%M', time.localtime(now))}"
+            task_store.record_pomodoro(
+                task_store.PomodoroRecord(
+                    plan_date=time.strftime("%Y-%m-%d", time.localtime(now)),
+                    task_text=self._current_task_text,
+                    kind=task_store.KIND_WORK,
+                    mode=self._mode,
+                    started_at=started_at,
+                    ended_at=now,
+                    planned_minutes=duration_min,
+                    actual_minutes=logged_min,
+                    ended_early=actual_minutes is not None,
+                )
             )
-            KbExcel().append_detail(label)
         except Exception:
-            logging.exception("failed to log pomodoro completion to Excel")
+            logging.exception("failed to record pomodoro completion")
+
+    def _record_planning_completion(self, ended_early: bool) -> None:
+        """The daily planning session is stored too (kind='planning'), but is
+        not counted as a pomodoro and not mirrored to Excel."""
+        from shouyu.service import task_store
+
+        try:
+            now = time.time()
+            planned_min = Config.pomodoro_planning_session_minutes()
+            started_at = self._planning_started_at or (now - planned_min * 60)
+            self._planning_started_at = None
+            task_store.record_pomodoro(
+                task_store.PomodoroRecord(
+                    plan_date=time.strftime("%Y-%m-%d", time.localtime(now)),
+                    task_text=self._current_task_text,
+                    kind=task_store.KIND_PLANNING,
+                    mode=self._mode,
+                    started_at=started_at,
+                    ended_at=now,
+                    planned_minutes=planned_min,
+                    actual_minutes=max(1, int(round((now - started_at) / 60))),
+                    ended_early=ended_early,
+                )
+            )
+        except Exception:
+            logging.exception("failed to record planning session")
 
     def _emit(self, event: str, payload: str) -> None:
         try:

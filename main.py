@@ -8,7 +8,7 @@ import threading
 from shouyu.action.shortcut import Shortcut
 from shouyu.config import Config
 from shouyu.log import Log
-from shouyu.service import dispatch, message_queue
+from shouyu.service import datastore, dispatch, message_queue, task_import
 from shouyu.service.excel import KbExcel
 from shouyu.util.package import Package
 from shouyu.util.process import ProcessManager
@@ -232,11 +232,16 @@ def _run_daemon():
     ProcessManager.kill_old_process()
     logging.info('Started service!')
 
-    # Durable queue must be ready before hotkeys can enqueue anything into
-    # it, and the dispatcher's first drain cycle also doubles as startup
-    # recovery for anything left pending from a crash / kill last run.
+    # Durable queue and the SQLite task / pomodoro / note tables must be
+    # ready before hotkeys can write anything, and the dispatcher's first
+    # drain cycle also doubles as startup recovery for anything left pending
+    # from a crash / kill last run.
     message_queue.init_db()
+    datastore.init_schema()
     dispatch.start()
+    # First run only: copy the Excel task history into SQLite, in the
+    # background (the habit dialog waits for it, see HabitDialog._set_importing).
+    task_import.start_in_background()
 
     tray = Tray.create()
     threading.Thread(target=tray.run, daemon=True).start()

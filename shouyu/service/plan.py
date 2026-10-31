@@ -195,6 +195,9 @@ class PlanTask:
     # Date (YYYY-MM-DD) the task entered the Backlog pool. Only meaningful for
     # backlog tasks; today's plan tasks leave it empty. Used to show "已搁置 N 天".
     created_date: str = ""
+    # SQLite `task.id` (see service/task_store.py); 0 means not yet saved.
+    # Unlike `row`, it survives carry-over and moves between today / backlog.
+    task_id: int = 0
 
     def display_text(self) -> str:
         return self.text or ""
@@ -211,6 +214,7 @@ class PlanTask:
             "reflection": self.reflection,
             "category": self.category.value,
             "created_date": self.created_date,
+            "task_id": self.task_id,
         }
 
     @classmethod
@@ -224,6 +228,7 @@ class PlanTask:
             reflection=data.get("reflection") or "",
             category=TaskCategory.from_value(data.get("category")),
             created_date=data.get("created_date") or "",
+            task_id=int(data.get("task_id") or 0),
         )
 
 
@@ -583,6 +588,19 @@ class PlanService:
     def mark_plan_done(self, plan_row: int) -> None:
         if plan_row:
             self._set_status(plan_row, TaskStatus.DONE, column=PLAN_TASK_COLUMN)
+
+    def mark_plan_done_by_text(self, texts: List[str]) -> int:
+        """Mark every not-yet-done plan task whose text is in `texts` as DONE.
+
+        Used by the Excel mirror, which only knows task text (SQLite has no
+        Excel row numbers). Returns how many rows were changed."""
+        wanted = {(t or "").strip() for t in texts if (t or "").strip()}
+        changed = 0
+        for task in self.read_plan_tasks():
+            if task.status != TaskStatus.DONE and task.text.strip() in wanted:
+                self.mark_plan_done(task.row)
+                changed += 1
+        return changed
 
     def mark_active_done(self, active_row: int) -> None:
         self._set_status(active_row, TaskStatus.DONE, column=ACTIVE_TASK_COLUMN)

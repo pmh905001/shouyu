@@ -1,8 +1,8 @@
 """Background consumer that drains `message_queue` into kb.xlsx.
 
-Design reference: docs/excel-save-resilience.md (§4, §8). Every write path
-(habit_dialog / todo_panel plan-save, clipboard/screenshot save) enqueues a
-message and returns immediately; this module is the single place that
+Design reference: docs/excel-save-resilience.md (§4, §8). SQLite is the
+source of truth (see task_store.py / note_store.py); every save there also
+enqueues a mirror message, and this module is the single place that
 actually opens Excel and retries when it's locked by another program.
 
 One drain cycle:
@@ -90,7 +90,10 @@ def _dispatch_plan_save(kb_excel, payload: dict, attachment_bytes: Optional[byte
 
     tasks = [PlanTask.from_dict(d) for d in (payload.get('tasks') or [])]
     non_empty = [t for t in tasks if (t.text or '').strip()]
-    plan = kb_excel.plan_service()
+    # `date` is the day the plan was saved for in SQLite; older messages
+    # without it mean "whatever today is when this is dispatched".
+    plan_date = payload.get('date')
+    plan = kb_excel.plan_service_for(plan_date, create=True) if plan_date else kb_excel.plan_service()
     plan.write_plan_tasks(non_empty)
 
     original_in_progress = payload.get('original_in_progress')
@@ -120,6 +123,19 @@ def _dispatch_plan_save(kb_excel, payload: dict, attachment_bytes: Optional[byte
     kb_excel.mark_changed()
 
 
+def _dispatch_plan_mark_done_by_text(kb_excel, payload: dict, attachment_bytes: Optional[bytes], image_path: str) -> None:
+    plan = kb_excel.plan_service_for(payload.get('date'))
+    if plan is None:
+        logging.info(f"mark-done mirror skipped: no sheet for {payload.get('date')}")
+        return
+    if plan.mark_plan_done_by_text(payload.get('texts') or []):
+        kb_excel.mark_changed()
+
+
+def _dispatch_pomodoro_log(kb_excel, payload: dict, attachment_bytes: Optional[bytes], image_path: str) -> None:
+    kb_excel.stage_detail(payload.get('label') or '', date_str=payload.get('date'))
+
+
 def _dispatch_clipboard_append(kb_excel, payload: dict, attachment_bytes: Optional[bytes], image_path: str) -> None:
     from PIL import Image as PILImageModule
 
@@ -133,6 +149,8 @@ def _dispatch_clipboard_append(kb_excel, payload: dict, attachment_bytes: Option
 
 _DISPATCHERS = {
     'plan_save': _dispatch_plan_save,
+    'plan_mark_done_by_text': _dispatch_plan_mark_done_by_text,
+    'pomodoro_log': _dispatch_pomodoro_log,
     'clipboard_append': _dispatch_clipboard_append,
 }
 

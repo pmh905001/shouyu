@@ -1,7 +1,9 @@
 import io
 import logging
 import os
+import tempfile
 import threading
+from datetime import datetime, timezone
 from functools import partial
 from typing import Optional
 
@@ -88,13 +90,12 @@ class Shortcut:
         cls._enqueue_clipboard_save(column)
 
     @staticmethod
-    def _enqueue_clipboard_save(column: Optional[str]) -> None:
-        """Grab the clipboard and hand it to the durable queue, then return
-        immediately - the actual Excel write happens later on the shared
-        background dispatcher (service/dispatch.py). This keeps the hotkey
-        response (and the single executor thread that serializes hotkey
-        actions) fast regardless of how big kb.xlsx has grown or whether
-        Excel currently has the file locked. See docs/excel-save-resilience.md.
+    def _enqueue_clipboard_save(column: Optional[str], source: str = 'clipboard') -> None:
+        """Grab the clipboard and save it as a note in SQLite (the record
+        itself), which also queues its Excel mirror; the Excel write happens
+        later on the shared background dispatcher (service/dispatch.py). This
+        keeps the hotkey response fast regardless of how big kb.xlsx has
+        grown or whether Excel currently has the file locked.
         """
         img = ImageGrab.grabclipboard()
         copied_text = pyperclip.paste()
@@ -102,24 +103,18 @@ class Shortcut:
             logging.info('clipboard empty, nothing to save')
             return
 
-        from shouyu.service import dispatch, message_queue
+        from shouyu.service import dispatch, note_store
 
         if img is not None:
             buf = io.BytesIO()
             img.save(buf, format='PNG')
-            attachment_id = message_queue.store_attachment(
-                buf.getvalue(), mime_type='image/png', filename='clipboard.png'
-            )
-            payload = {'column': column}
+            note_store.save(image_png=buf.getvalue(), excel_column=column, source=source)
             preview = '截图'
         else:
-            attachment_id = None
-            payload = {'column': column, 'text': copied_text}
+            note_store.save(text=copied_text, excel_column=column, source=source)
             preview = copied_text[:60]
 
-        message_queue.enqueue('clipboard_append', payload, attachment_id=attachment_id)
         dispatch.notify_recorded('已记录', preview)
-        dispatch.kick()
 
     @classmethod
     @action_handler
@@ -164,7 +159,7 @@ class Shortcut:
             MessageBox.pop_up_message(title='OCR', msg='未识别到文字', level=MessageType.ERROR)
             return
         pyperclip.copy(text)
-        Shortcut._enqueue_clipboard_save(column)
+        Shortcut._enqueue_clipboard_save(column, source='ocr')
 
     @classmethod
     def _generate_collector(cls):
@@ -176,8 +171,40 @@ class Shortcut:
     @classmethod
     @action_handler
     def show_status(cls):
+        """alt+/: show the last saved clipboard / screenshot / OCR record,
+        read from SQLite (no Excel load)."""
         logging.info('show status')
-        KbExcel().move_column()
+        from shouyu.service import note_store
+        from shouyu.view.msgbox import MessageBox
+
+        note = note_store.last()
+        if note is None:
+            MessageBox.pop_up_message(title='上一条记录', msg='还没有记录')
+            return
+        title = f'上一条记录 · {cls._format_note_time(note.created_at)}'
+        image = note_store.image_bytes(note)
+        if image is not None:
+            # The toast shows asynchronously from a file path, so the file
+            # must outlive this call; one fixed path is overwritten each time.
+            path = os.path.join(tempfile.gettempdir(), 'shouyu_last_note.png')
+            with open(path, 'wb') as f:
+                f.write(image)
+            MessageBox.pop_up_message(title=title, msg='截图', image_path=path)
+        else:
+            MessageBox.pop_up_message(title=title, msg=note.text[:KbExcel.POPUP_MSG_LENGTH])
+
+    @staticmethod
+    def _format_note_time(created_at_utc: str) -> str:
+        """'2026-10-31T01:30:00.123Z' -> local '09:30:00', prefixed with the
+        date when it isn't today."""
+        try:
+            moment = datetime.strptime(created_at_utc, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+        except ValueError:
+            return created_at_utc
+        local = moment.astimezone()
+        if local.strftime('%Y-%m-%d') == time.strftime('%Y-%m-%d'):
+            return local.strftime('%H:%M:%S')
+        return local.strftime('%Y-%m-%d %H:%M:%S')
 
     @classmethod
     @action_handler

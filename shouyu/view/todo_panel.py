@@ -19,6 +19,7 @@ Keys:
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -76,6 +77,16 @@ _PRIORITY_BADGE = {
 _TASK_ROLE = Qt.UserRole + 1
 
 
+def _toast_import_running() -> None:
+    from shouyu.view.msgbox import MessageBox, MessageType
+
+    MessageBox.pop_up_message(
+        "正在导入",
+        "正在从 Excel 导入任务历史，暂时不能保存，请稍后重新打开。",
+        level=MessageType.ERROR,
+    )
+
+
 def _format_item(task: PlanTask) -> str:
     glyph = _STATUS_GLYPH.get(task.status, "○")
     parts = [glyph, "  ", task.text or ""]
@@ -102,26 +113,6 @@ def _apply_item_style(item: QListWidgetItem, status: TaskStatus) -> None:
     item.setFont(font)
 
 
-def _enqueue_plan_save(
-    tasks_snapshot: List[PlanTask], original_in_progress: Optional[str]
-) -> None:
-    """Enqueue today's plan onto the durable message queue and return
-    immediately; the shared background dispatcher (service/dispatch.py) does
-    the actual Excel write. See docs/excel-save-resilience.md and
-    habit_dialog._enqueue_plan_save for the fuller rationale - this panel
-    only ever edits today's plan tasks, so its payload omits the
-    backlog/yesterday-carryover fields that dialog needs."""
-    from shouyu.service import dispatch, message_queue
-
-    payload = {
-        "tasks": [t.to_dict() for t in tasks_snapshot],
-        "original_in_progress": original_in_progress,
-    }
-    message_queue.enqueue("plan_save", payload)
-    dispatch.notify_recorded("今日任务已记录", "后台同步中，Excel 被占用也不会丢失")
-    dispatch.kick()
-
-
 class TodoPanel(QWidget):
     """A floating window that lets the user manage today's plan tasks."""
 
@@ -143,6 +134,9 @@ class TodoPanel(QWidget):
 
         self._tasks: List[PlanTask] = []
         self._original_in_progress: Optional[str] = None
+        # Local date the list was loaded for; saves go to this day even if
+        # the panel stays open past midnight.
+        self._plan_date = time.strftime("%Y-%m-%d")
         self._pending_duration_prompt: set = set()
 
         # See HabitDialog._undo_stack for the full rationale.
@@ -156,20 +150,22 @@ class TodoPanel(QWidget):
     # ---------- public API ----------
 
     def refresh_from_excel(self) -> None:
-        from shouyu.service.excel import KbExcel
+        """Load today's plan. Despite the (kept) name, this reads SQLite."""
+        from shouyu.service import task_import, task_store
 
+        self._plan_date = time.strftime("%Y-%m-%d")
+        if task_import.is_running():
+            _toast_import_running()
         try:
-            excel = KbExcel()
-            tasks = excel.plan_service().read_plan_tasks()
+            tasks = task_store.load_today(self._plan_date)
         except Exception:
-            logging.exception("failed to read plan from Excel")
+            logging.exception("failed to read today's plan from SQLite")
             tasks = []
 
         self._tasks = tasks
         in_progress = next((t for t in tasks if t.status == TaskStatus.IN_PROGRESS), None)
         self._original_in_progress = in_progress.text if in_progress else None
-        # Re-loading from Excel invalidates undo history (PlanTask identity
-        # changes on disk).
+        # Re-loading invalidates undo history.
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._reload_list_widget()
@@ -462,6 +458,9 @@ class TodoPanel(QWidget):
                 duration_minutes=t.duration_minutes,
                 priority=t.priority,
                 reflection=t.reflection,
+                category=t.category,
+                created_date=t.created_date,
+                task_id=t.task_id,
             )
             for t in tasks
         ]
@@ -744,10 +743,32 @@ class TodoPanel(QWidget):
         self.closed.emit()
 
     def _dispatch_save(self) -> None:
-        # Each save enqueues a fresh durable message, so later edits never
-        # get lost behind an earlier "already saving" flag.
-        tasks_snapshot = self._clone_tasks(self._tasks)
-        _enqueue_plan_save(tasks_snapshot, self._original_in_progress)
+        """Save today's plan straight into SQLite (the backlog is not edited
+        here, so it is left untouched). The live PlanTask objects are passed
+        so newly created tasks get their task_id back for the next save."""
+        from shouyu.service import task_import, task_store
+        from shouyu.view.msgbox import MessageBox, MessageType
+
+        if task_import.is_running():
+            _toast_import_running()
+            return
+        try:
+            task_store.save_plan(
+                task_store.PlanSaveRequest(
+                    plan_date=self._plan_date,
+                    today_tasks=self._tasks,
+                    original_in_progress=self._original_in_progress,
+                )
+            )
+        except Exception:
+            logging.exception("failed to save today's plan")
+            MessageBox.pop_up_message(
+                "保存失败", "今日任务没有保存成功，请查看 kb.log 后重试。", level=MessageType.ERROR
+            )
+            return
+        in_progress = next((t for t in self._tasks if t.status == TaskStatus.IN_PROGRESS), None)
+        self._original_in_progress = in_progress.text if in_progress else None
+        MessageBox.pop_up_message("今日任务已保存", "已保存到本地数据库", level=MessageType.SUCCESS)
 
     # ---------- qt overrides ----------
 

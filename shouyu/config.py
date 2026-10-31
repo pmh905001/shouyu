@@ -33,16 +33,24 @@ class Config:
 
     @classmethod
     def sqlite_db_path(cls):
-        """Return the SQLite queue database path.
+        """Return the v2 SQLite database path (queue + tasks + pomodoros + notes).
 
         An absolute path in kb.ini is shared by development and packaged
-        runs. When omitted (or relative), preserve the original behavior:
-        place shouyu.db next to the active kb.ini / executable directory.
+        runs. When omitted (or relative), place shouyu_v2.db next to the
+        active kb.ini / executable directory. v2 deliberately uses a
+        different file name from v1's shouyu.db so the two never share data.
         """
         configured = str(cls.get('sqlite_db_path', '') or '').strip()
         if configured and os.path.isabs(configured):
             return os.path.abspath(configured)
-        return os.path.join(os.path.dirname(os.path.abspath(cls.FILE_NAME)), 'shouyu.db')
+        return os.path.join(os.path.dirname(os.path.abspath(cls.FILE_NAME)), 'shouyu_v2.db')
+
+    @classmethod
+    def excel_mirror(cls):
+        """When true, every task / backlog / pomodoro / clipboard write saved
+        to SQLite is also mirrored into the Excel file for display. SQLite
+        stays the only source of truth either way. Default: true."""
+        return str(cls.get('excel_mirror', 'true') or 'true').strip().lower() == 'true'
 
     @classmethod
     def log_path(cls):
@@ -66,7 +74,7 @@ class Config:
     @classmethod
     def work_dir(cls):
         """Return the shouyu working directory (the folder holding kb.ini,
-        and by default kb.log / crash.log / shouyu.db)."""
+        and by default kb.log / crash.log / shouyu_v2.db)."""
         return os.path.dirname(os.path.abspath(cls.FILE_NAME))
 
     @classmethod

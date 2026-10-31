@@ -1,7 +1,9 @@
 """Durable local message queue backing Excel-save resilience.
 
 Design reference: docs/excel-save-resilience.md (§8). This module owns two
-sqlite tables in `shouyu.db` (co-located with kb.ini):
+sqlite tables in `shouyu_v2.db` (co-located with kb.ini; v2 keeps its own
+file so it never touches v1's `shouyu.db`). The same file also holds the
+task / pomodoro / note tables owned by `datastore.py`:
 
   queue        - append-only ledger of writes waiting to be dispatched to
                  their eventual home (today: kb.xlsx). Rows are never
@@ -33,7 +35,7 @@ from typing import Any, List, Optional
 
 from shouyu.config import Config
 
-DB_FILE_NAME = 'shouyu.db'
+DB_FILE_NAME = 'shouyu_v2.db'
 
 # Images are always inlined regardless of size, up to this hard safety-valve
 # cap; beyond it (an outlier, not the common case) they spill to an external
@@ -57,6 +59,14 @@ def _db_path() -> str:
         return configured
     base_dir = os.path.dirname(os.path.abspath(Config.FILE_NAME)) or '.'
     return os.path.join(base_dir, DB_FILE_NAME)
+
+
+def db_path() -> str:
+    return _db_path()
+
+
+def utcnow_iso() -> str:
+    return _utcnow_iso()
 
 
 def _attachments_root() -> str:
@@ -142,12 +152,19 @@ def _sanitize_filename(name: str) -> str:
     return name[:120] or 'attachment'
 
 
-def store_attachment(data: bytes, mime_type: str = '', filename: str = '') -> int:
+def store_attachment(
+    data: bytes,
+    mime_type: str = '',
+    filename: str = '',
+    conn: Optional[sqlite3.Connection] = None,
+) -> int:
     """Persist a binary/text payload and return its attachment id.
 
     Images are always inlined (up to a hard safety-valve cap); other types
     inline up to NON_IMAGE_INLINE_MAX_BYTES and spill to an external,
     day-bucketed file above it. See docs/excel-save-resilience.md §8.2.
+
+    Pass `conn` to insert inside the caller's open transaction.
     """
     digest = hashlib.sha256(data).hexdigest()
     byte_size = len(data)
@@ -160,13 +177,15 @@ def store_attachment(data: bytes, mime_type: str = '', filename: str = '') -> in
         storage, blob = 'file', None
         file_path = _write_external_file(data, digest, filename)
 
-    with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO attachments (created_at, sha256, mime_type, byte_size, storage, data, file_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (_utcnow_iso(), digest, mime_type, byte_size, storage, blob, file_path),
-        )
-        return cur.lastrowid
+    sql = (
+        "INSERT INTO attachments (created_at, sha256, mime_type, byte_size, storage, data, file_path) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    params = (_utcnow_iso(), digest, mime_type, byte_size, storage, blob, file_path)
+    if conn is not None:
+        return conn.execute(sql, params).lastrowid
+    with _connect() as own_conn:
+        return own_conn.execute(sql, params).lastrowid
 
 
 def _write_external_file(data: bytes, digest: str, filename: str) -> str:
@@ -211,16 +230,26 @@ class QueueMessage:
     attempts: int
 
 
-def enqueue(kind: str, payload: Any, attachment_id: Optional[int] = None) -> int:
+def enqueue(
+    kind: str,
+    payload: Any,
+    attachment_id: Optional[int] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> int:
+    """Append a pending message. Pass `conn` to enqueue inside the caller's
+    open transaction, so the message commits (or rolls back) together with
+    the data it mirrors."""
     now = _utcnow_iso()
     body = json.dumps(payload, ensure_ascii=False)
-    with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO queue (created_at, updated_at, kind, payload, attachment_id, status, attempts) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', 0)",
-            (now, now, kind, body, attachment_id),
-        )
-        return cur.lastrowid
+    sql = (
+        "INSERT INTO queue (created_at, updated_at, kind, payload, attachment_id, status, attempts) "
+        "VALUES (?, ?, ?, ?, ?, 'pending', 0)"
+    )
+    params = (now, now, kind, body, attachment_id)
+    if conn is not None:
+        return conn.execute(sql, params).lastrowid
+    with _connect() as own_conn:
+        return own_conn.execute(sql, params).lastrowid
 
 
 def get_cursor(consumer: str) -> int:
@@ -387,6 +416,11 @@ def purge_resolved(older_than_days: int) -> int:
     cutoff_ts = datetime.now(timezone.utc).timestamp() - older_than_days * 86400
     removed = 0
     with _connect() as conn:
+        # Clipboard notes (datastore.py) reference the same attachments; an
+        # attachment a note still points at is that note's only copy.
+        has_note_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note'"
+        ).fetchone() is not None
         rows = conn.execute(
             "SELECT id, created_at, attachment_id FROM queue WHERE status IN ('done', 'dead')"
         ).fetchall()
@@ -400,6 +434,10 @@ def purge_resolved(older_than_days: int) -> int:
                 still_referenced = conn.execute(
                     "SELECT 1 FROM queue WHERE attachment_id = ? LIMIT 1", (attachment_id,)
                 ).fetchone()
+                if still_referenced is None and has_note_table:
+                    still_referenced = conn.execute(
+                        "SELECT 1 FROM note WHERE attachment_id = ? LIMIT 1", (attachment_id,)
+                    ).fetchone()
                 if still_referenced is None:
                     att = conn.execute(
                         "SELECT storage, file_path FROM attachments WHERE id = ?", (attachment_id,)
