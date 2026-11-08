@@ -312,10 +312,9 @@ class Shortcut:
         cls._add_hot_key_from_config('toggle_pomodoro', cls.toggle_pomodoro, is_in_queue=False)
         cls._add_hot_key_from_config('toggle_pomodoro_window', cls.toggle_pomodoro_window, is_in_queue=False)
         cls._add_hot_key_from_config('restore_backup', cls.show_backup_restore, is_in_queue=False)
-        # Not suppressed: if the native Win+R comes back, Windows still gets
-        # the keystroke and the Run dialog is just brought to the front.
-        if Config.win_r_run_dialog_enabled():
-            keyboard.add_hotkey('windows+r', ProcessManager.open_run_dialog)
+        run_dialog_key = Config.get_shortcut('run_dialog')
+        cls._add_hot_key_from_config('run_dialog', ProcessManager.open_run_dialog,
+                                     args=(run_dialog_key,), is_in_queue=False)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)

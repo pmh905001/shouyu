@@ -49,6 +49,8 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-11-08
 
+- **Win+J 打开「运行」（替代被屏蔽的 Win+R）**：查明本机 Win+R 失效的根因是公司启用的 Windows 键盘筛选器（`MsKeyboardFilter`）屏蔽了 Win+R，按键在到达任何程序前就被吞掉。新增可配置热键 `[shortcuts] run_dialog`，默认 `windows+j`（Windows 11 未占用），按下即调起「运行」对话框；留空即关闭。打开「运行」时记一行日志，带上实际触发的热键和 explorer pid（如 `windows+j: opened run dialog, explorer pid=...`）。（`kb.ini`、`shouyu/action/shortcut.py`、`shouyu/util/process.py`）
+- **删除 `enable_win_r` 开关**：该开关只能注册 Win+R 热键，在被键盘筛选器屏蔽的机器上按键到达不了 shouyu，无实际作用，故连同 `shouyu/config.py` 的读取方法、`shortcut.py` 的注册代码、`kb.ini` 的配置段一并删除。（`shouyu/config.py`、`shouyu/action/shortcut.py`、`kb.ini`）
 - **番茄悬浮窗改为纯圆球 + 右键菜单**：去掉展开的番茄卡片（阶段、倒计时、按钮、模式/提醒切换全部移入菜单）。菜单顶部显示状态与当前任务；主操作区用大按钮突出「开始/暂停/继续」，并按阶段显示「+5 分钟 / 去休息 / 跳过休息 / 停止」；「深度 / 经典」用分段按钮放在菜单中部；警报时「我回来了」置顶。今日任务与隐藏放在第一层，数据与日志、更多（皮肤、提醒方式、设置、帮助）、系统（开机启动、重启、退出）放在二级子菜单。圆球默认位置贴近工作区右下角（边距 24px → 0），减少遮挡聊天窗口的发送按钮。（`shouyu/view/pomodoro_window.py`）
 - **shouyu 代管 Win+R 打开「运行」**：Windows 11 25H2 上系统自带的 Win+R 失效，新增可选热键，按 Win+R 由 shouyu 直接调起「运行」对话框；不拦截按键，系统 Win+R 恢复后也不冲突。通过 `kb.ini` 的 `[shortcuts] enable_win_r` 开关控制，默认关闭。（`kb.ini`、`shouyu/config.py`、`shouyu/action/shortcut.py`、`shouyu/util/process.py`）
 

@@ -153,10 +153,11 @@ class ProcessManager:
             logging.exception(f'failed to open folder: {path}')
 
     @staticmethod
-    def open_run_dialog() -> None:
+    def open_run_dialog(hotkey: str = '') -> None:
         """Open the Windows "Run" dialog (the one Win+R normally shows)."""
         try:
-            subprocess.Popen(['explorer.exe', 'shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}'])
+            proc = subprocess.Popen(['explorer.exe', 'shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}'])
+            logging.info(f'{hotkey or "run dialog"}: opened run dialog, explorer pid={proc.pid}')
         except OSError:
             logging.exception('failed to open run dialog')
 
