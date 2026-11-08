@@ -47,6 +47,10 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-11-08
+
+- **shouyu 代管 Win+R 打开「运行」**：Windows 11 25H2 上系统自带的 Win+R 失效，新增可选热键，按 Win+R 由 shouyu 直接调起「运行」对话框；不拦截按键，系统 Win+R 恢复后也不冲突。通过 `kb.ini` 的 `[shortcuts] enable_win_r` 开关控制，默认关闭。（`kb.ini`、`shouyu/config.py`、`shouyu/action/shortcut.py`、`shouyu/util/process.py`）
+
 ## 2026-10-21
 
 - **修复 Ctrl+Alt+H 习惯窗口长时间卡死、随后无响应崩溃**：根因是 `plan.py` 的 `count_pomodoros_logged()` 在逐行循环里每次都调用 openpyxl 的 `max_column`（会遍历整张表的全部单元格），复杂度为「行数 × 单元格数」；而 `_select_latest_history_day()` 又对最近 30 天逐日调用它，实测刷新一次耗时约 262 秒，期间 UI 线程被阻塞。修复后列数只解析一次（`iter_rows` 按列上限读取，结果与旧实现一致），刷新耗时降至约 2 秒。（`shouyu/service/plan.py`）

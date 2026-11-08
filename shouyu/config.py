@@ -78,6 +78,13 @@ class Config:
         return cls.get(key, default, 'shortcuts', convert)
 
     @classmethod
+    def win_r_run_dialog_enabled(cls):
+        """When true, shouyu opens the Windows Run dialog on Win+R - a
+        stand-in for machines where the native Win+R stopped responding
+        (seen on Windows 11 25H2). Default: false."""
+        return cls.get('enable_win_r', 'false', 'shortcuts').strip().lower() == 'true'
+
+    @classmethod
     def pinned_sheet_names(cls):
         """Sheet names (besides the daily YYYY-MM-DD tabs) that should always
         be grouped together at the *end* of the workbook's tab bar, right

@@ -153,6 +153,14 @@ class ProcessManager:
             logging.exception(f'failed to open folder: {path}')
 
     @staticmethod
+    def open_run_dialog() -> None:
+        """Open the Windows "Run" dialog (the one Win+R normally shows)."""
+        try:
+            subprocess.Popen(['explorer.exe', 'shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}'])
+        except OSError:
+            logging.exception('failed to open run dialog')
+
+    @staticmethod
     def kill_old_process():
         file_name = 'pid.txt'
         current_pid = psutil.Process().pid
