@@ -49,6 +49,7 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 ## 2026-11-08
 
+- **番茄悬浮窗改为纯圆球 + 右键菜单**：去掉展开的番茄卡片（阶段、倒计时、按钮、模式/提醒切换全部移入菜单）。菜单顶部显示状态与当前任务；主操作区用大按钮突出「开始/暂停/继续」，并按阶段显示「+5 分钟 / 去休息 / 跳过休息 / 停止」；「深度 / 经典」用分段按钮放在菜单中部；警报时「我回来了」置顶。今日任务与隐藏放在第一层，数据与日志、更多（皮肤、提醒方式、设置、帮助）、系统（开机启动、重启、退出）放在二级子菜单。圆球默认位置贴近工作区右下角（边距 24px → 0），减少遮挡聊天窗口的发送按钮。（`shouyu/view/pomodoro_window.py`）
 - **shouyu 代管 Win+R 打开「运行」**：Windows 11 25H2 上系统自带的 Win+R 失效，新增可选热键，按 Win+R 由 shouyu 直接调起「运行」对话框；不拦截按键，系统 Win+R 恢复后也不冲突。通过 `kb.ini` 的 `[shortcuts] enable_win_r` 开关控制，默认关闭。（`kb.ini`、`shouyu/config.py`、`shouyu/action/shortcut.py`、`shouyu/util/process.py`）
 
 ## 2026-10-21

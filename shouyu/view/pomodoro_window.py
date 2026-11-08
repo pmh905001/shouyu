@@ -16,7 +16,6 @@ from PySide6.QtCore import (
     Qt,
     QPoint,
     QPointF,
-    QRect,
     QRectF,
     QSize,
     QTimer,
@@ -26,8 +25,6 @@ from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
     QFont,
-    QGuiApplication,
-    QKeySequence,
     QLinearGradient,
     QMouseEvent,
     QPainter,
@@ -35,17 +32,19 @@ from PySide6.QtGui import (
     QPen,
     QPolygonF,
     QRadialGradient,
-    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QMenu,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from shouyu.view.styles import (
@@ -95,10 +94,13 @@ def _format_remaining(seconds: int) -> str:
 _RESOLUTION_RE = re.compile(r'^(\d+)x(\d+)$')
 
 
-_CARD_SIZE = QSize(296, 168)
 # The window is a bit larger than the sphere to leave room for its shadow.
 _BALL_SIZE = QSize(86, 86)
 _BALL_DIAMETER = 72
+# Gap between the ball's window box and the work-area edge (taskbar excluded).
+# 0 keeps the ball tucked into the bottom-right corner so it stays clear of
+# chat send buttons in the middle of the screen.
+_EDGE_MARGIN = 0
 
 # (highlight, body, edge) stops of the sphere's radial gradient.
 _WORK_BALL_COLOR = ("#FF8A80", "#E53935", "#8E0E0E")
@@ -122,6 +124,98 @@ _SKIN_LABELS = {
 }
 _SKIN_STATE_KEY = "pomodoro_skin"
 
+# ---------- right-click menu styling ----------
+
+_ALERT_RED = "#FF3B30"
+_FOCUS_BUTTON_COLOR = "#E53935"
+_BREAK_BUTTON_COLOR = "#2FB344"
+_NEUTRAL_BUTTON_COLOR = "#3A3A3A"
+
+_MENU_STYLE = (
+    "QMenu {"
+    "  background-color: #1E1E1E;"
+    "  color: #EDEDED;"
+    "  border: 1px solid #3A3A3A;"
+    "  border-radius: 10px;"
+    "  padding: 6px;"
+    "  font-size: 12px;"
+    "}"
+    "QMenu::item { padding: 6px 28px 6px 14px; border-radius: 6px; }"
+    "QMenu::item:selected { background-color: rgba(255,255,255,0.10); }"
+    "QMenu::item:disabled { color: #7A7A7A; font-size: 11px; font-weight: 600; }"
+    "QMenu::separator { height: 1px; background: #3A3A3A; margin: 6px 8px; }"
+    "QMenu::indicator { width: 14px; height: 14px; }"
+)
+
+
+def _pill_style(background: str) -> str:
+    hover = QColor(background).lighter(118).name()
+    return (
+        "QPushButton {"
+        f"  background-color: {background};"
+        "  color: white;"
+        "  border: none;"
+        "  border-radius: 7px;"
+        "  padding: 7px 10px;"
+        "  font-size: 12px;"
+        "  font-weight: 600;"
+        "}"
+        f"QPushButton:hover {{ background-color: {hover}; }}"
+    )
+
+
+def _segment_style() -> str:
+    return (
+        "QPushButton {"
+        "  background-color: rgba(255,255,255,0.06);"
+        "  color: #C9C9C9;"
+        "  border: 1px solid rgba(255,255,255,0.16);"
+        "  border-radius: 6px;"
+        "  padding: 5px 10px;"
+        "  font-size: 12px;"
+        "}"
+        "QPushButton:hover { background-color: rgba(255,255,255,0.14); color: white; }"
+        f"QPushButton:checked {{ background-color: {ACCENT_COLOR_HEX};"
+        f"  color: white; border: 1px solid {ACCENT_COLOR_HEX}; font-weight: 700; }}"
+    )
+
+
+def _menu_button(menu: QMenu, text: str, background: str, callback, tooltip: str = "") -> QPushButton:
+    """A colored action button inside the menu. Closes the menu, then runs."""
+    button = QPushButton(text)
+    button.setCursor(Qt.PointingHandCursor)
+    button.setToolTip(tooltip)
+    button.setStyleSheet(_pill_style(background))
+    button.clicked.connect(lambda _checked=False: (menu.close(), callback()))
+    return button
+
+
+def _segmented(menu: QMenu, options, current, on_pick) -> QWidget:
+    """Exclusive segmented control. `options` is a list of (value, label)."""
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    group = QButtonGroup(row)
+    group.setExclusive(True)
+    for value, label in options:
+        button = QPushButton(label)
+        button.setCheckable(True)
+        button.setChecked(value == current)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setStyleSheet(_segment_style())
+        button.clicked.connect(lambda _checked=False, v=value: (menu.close(), on_pick(v)))
+        group.addButton(button)
+        layout.addWidget(button)
+    return row
+
+
+def _add_widget_row(menu: QMenu, widget: QWidget) -> None:
+    action = QWidgetAction(menu)
+    action.setDefaultWidget(widget)
+    menu.addAction(action)
+
+
 
 class PomodoroWindow(QWidget):
     _instance: Optional["PomodoroWindow"] = None
@@ -141,13 +235,12 @@ class PomodoroWindow(QWidget):
 
         self._drag_offset: Optional[QPoint] = None
 
-        # Compact mode = the draggable ball (default); expanded = the full
-        # card with buttons. Double-click the ball to expand, Esc to collapse.
-        self._compact = True
-        # The hard idle alarm needs the card's "我回来了" button, so it
-        # expands the ball; remember that so acknowledging collapses it again.
-        self._expanded_by_alarm = False
         self._phase = "idle"
+        # Live text for the ball and the right-click menu header. The ball is
+        # the only on-screen surface; everything else lives in the menu.
+        self._time_text = "00:00"
+        self._task_text = ""
+        self._tip_text = ""
         # Which picture the compact form draws: the glass ball or a tomato.
         self._skin = self._load_skin()
 
@@ -183,12 +276,8 @@ class PomodoroWindow(QWidget):
         # clear the warning), and we want to reflect whatever the latest
         # phase event told us, not a stale label.
         self._normal_phase_text = "空闲"
-        self._normal_phase_color = SUBTEXT_COLOR_HEX
 
         self._build_ui()
-        self._apply_compact_layout()
-        self._refresh_mode_button()
-        self._refresh_env_button()
         self._move_to_default_corner()
 
     def _build_ui(self) -> None:
@@ -197,183 +286,8 @@ class PomodoroWindow(QWidget):
 
         self.ball = _BallView(self)
         outer.addWidget(self.ball)
-
-        esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
-        esc.activated.connect(lambda: self.set_compact(True))
-
-        self.card = QFrame()
-        self.card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {PANEL_COLOR_HEX};
-                border-radius: 14px;
-                border: 1px solid #3A3A3A;
-            }}
-            """
-        )
-        outer.addWidget(self.card)
-
-        layout = QVBoxLayout(self.card)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
-
-        header_row = QHBoxLayout()
-        self.phase_label = QLabel("空闲")
-        self.phase_label.setStyleSheet(
-            f"color: {SUBTEXT_COLOR_HEX}; font-size: 12px; font-weight: 600;"
-        )
-        header_row.addWidget(self.phase_label)
-
-        self.mode_btn = QPushButton("经典")
-        self.mode_btn.setToolTip("切换 经典 25/5 ↔ 深度 90/15")
-        self.mode_btn.setCursor(Qt.PointingHandCursor)
-        self.mode_btn.setFixedHeight(20)
-        self.mode_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: rgba(255,255,255,0.06);"
-            "  color: #C9C9C9;"
-            "  border: 1px solid rgba(255,255,255,0.16);"
-            "  border-radius: 4px;"
-            "  padding: 1px 8px;"
-            "  font-size: 11px;"
-            "  min-height: 0;"
-            "}"
-            "QPushButton:hover { background-color: rgba(255,255,255,0.14); color: white; }"
-        )
-        self.mode_btn.clicked.connect(self._on_toggle_mode_clicked)
-        header_row.addWidget(self.mode_btn)
-
-        self.env_btn = QPushButton("🔄 自动")
-        self.env_btn.setToolTip("切换 自动 / 在家 / 在单位")
-        self.env_btn.setCursor(Qt.PointingHandCursor)
-        self.env_btn.setFixedHeight(20)
-        self.env_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: rgba(255,255,255,0.06);"
-            "  color: #C9C9C9;"
-            "  border: 1px solid rgba(255,255,255,0.16);"
-            "  border-radius: 4px;"
-            "  padding: 1px 8px;"
-            "  font-size: 11px;"
-            "  min-height: 0;"
-            "}"
-            "QPushButton:hover { background-color: rgba(255,255,255,0.14); color: white; }"
-        )
-        self.env_btn.clicked.connect(self._on_env_btn_clicked)
-        header_row.addWidget(self.env_btn)
-        header_row.addStretch(1)
-
-        self.cycles_label = QLabel("🍅 0")
-        self.cycles_label.setStyleSheet(f"color: {SUBTEXT_COLOR_HEX}; font-size: 12px;")
-        header_row.addWidget(self.cycles_label)
-        layout.addLayout(header_row)
-
-        self.time_label = QLabel("00:00")
-        self.time_label.setStyleSheet(
-            f"color: {TEXT_COLOR_HEX}; font-size: 30px; font-weight: 700;"
-        )
-        layout.addWidget(self.time_label)
-
-        self.task_label = QLabel("")
-        self.task_label.setStyleSheet(f"color: {ACCENT_COLOR_HEX}; font-size: 12px;")
-        self.task_label.setWordWrap(False)
-        layout.addWidget(self.task_label)
-
-        self.tip_label = QLabel("")
-        self.tip_label.setStyleSheet(
-            f"color: {SUBTEXT_COLOR_HEX}; font-size: 11px;"
-        )
-        self.tip_label.setWordWrap(True)
-        self.tip_label.setVisible(False)
-        layout.addWidget(self.tip_label)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(6)
-
-        # Shown only during a hard idle alarm. It is the ONLY way to silence
-        # the alarm — deliberately prominent (red) so it can't be ignored.
-        self.ack_btn = QPushButton("✋ 我回来了")
-        self.ack_btn.setToolTip("停止警报并记一次走神")
-        self.ack_btn.setCursor(Qt.PointingHandCursor)
-        self.ack_btn.setStyleSheet(self._ack_button_style())
-        self.ack_btn.clicked.connect(self._on_ack_clicked)
-        self.ack_btn.setVisible(False)
-        button_row.addWidget(self.ack_btn)
-
-        self.toggle_btn = QPushButton("暂停")
-        self.toggle_btn.setStyleSheet(self._button_style())
-        self.toggle_btn.clicked.connect(self._on_toggle_clicked)
-        button_row.addWidget(self.toggle_btn)
-
-        self.extend_btn = QPushButton("+5m")
-        self.extend_btn.setToolTip("延长当前阶段 5 分钟（在状态进入流时用）")
-        self.extend_btn.setStyleSheet(self._button_style())
-        self.extend_btn.clicked.connect(self._on_extend_clicked)
-        self.extend_btn.setVisible(False)
-        button_row.addWidget(self.extend_btn)
-
-        # Shown only during a focus phase: finish this pomodoro ahead of time
-        # (task done early) and go straight to the break.
-        self.finish_btn = QPushButton("去休息")
-        self.finish_btn.setToolTip("任务提前做完了？结束这个番茄，直接进入休息（计一个 🍅）")
-        self.finish_btn.setStyleSheet(self._button_style())
-        self.finish_btn.clicked.connect(self._on_finish_early_clicked)
-        self.finish_btn.setVisible(False)
-        button_row.addWidget(self.finish_btn)
-
-        self.skip_break_btn = QPushButton("跳过休息")
-        self.skip_break_btn.setToolTip("跳过休息，回到专注（不推荐，会被记录）")
-        self.skip_break_btn.setStyleSheet(self._button_style())
-        self.skip_break_btn.clicked.connect(self._on_skip_break_clicked)
-        self.skip_break_btn.setVisible(False)
-        button_row.addWidget(self.skip_break_btn)
-
-        stop_btn = QPushButton("停止")
-        stop_btn.setStyleSheet(self._button_style())
-        stop_btn.clicked.connect(self._on_stop_clicked)
-        button_row.addWidget(stop_btn)
-
-        hide_btn = QPushButton("隐藏")
-        hide_btn.setStyleSheet(self._button_style())
-        hide_btn.clicked.connect(self.hide)
-        button_row.addWidget(hide_btn)
-
-        collapse_btn = QPushButton("收起圆球")
-        collapse_btn.setToolTip("回到小圆球模式（也可以按 Esc）")
-        collapse_btn.setStyleSheet(self._button_style())
-        collapse_btn.clicked.connect(lambda: self.set_compact(True))
-        button_row.addWidget(collapse_btn)
-
-        layout.addLayout(button_row)
-
-    @staticmethod
-    def _button_style() -> str:
-        return (
-            "QPushButton {"
-            "  background-color: rgba(255,255,255,0.08);"
-            "  color: white;"
-            "  border: none;"
-            "  border-radius: 5px;"
-            "  padding: 3px 8px;"
-            "  font-size: 11px;"
-            "}"
-            "QPushButton:hover { background-color: rgba(255,255,255,0.18); }"
-        )
-
-    @staticmethod
-    def _ack_button_style() -> str:
-        return (
-            "QPushButton {"
-            "  background-color: #FF3B30;"
-            "  color: white;"
-            "  border: none;"
-            "  border-radius: 5px;"
-            "  padding: 3px 8px;"
-            "  font-size: 11px;"
-            "  font-weight: 700;"
-            "}"
-            "QPushButton:hover { background-color: #FF5A50; }"
-        )
+        self.setFixedSize(_BALL_SIZE)
+        self.setToolTip("拖动移动 · 右键打开菜单")
 
     def _target_screen(self):
         """The screen this window should always call home, per
@@ -409,7 +323,7 @@ class PomodoroWindow(QWidget):
         if screen is None:
             return
         geometry = screen.availableGeometry()
-        margin = 24
+        margin = _EDGE_MARGIN
         corner = Config.pomodoro_window_corner()
         if corner == 'bottom-left':
             x, y = geometry.left() + margin, geometry.bottom() - self.height() - margin
@@ -419,45 +333,6 @@ class PomodoroWindow(QWidget):
             x, y = geometry.left() + margin, geometry.top() + margin
         else:  # bottom-right
             x, y = geometry.right() - self.width() - margin, geometry.bottom() - self.height() - margin
-        self.move(x, y)
-
-    # ---------- compact (ball) / expanded (card) ----------
-
-    def is_compact(self) -> bool:
-        return self._compact
-
-    def set_compact(self, compact: bool) -> None:
-        if compact == self._compact:
-            return
-        self._expanded_by_alarm = False
-        old_geometry = QRect(self.geometry())
-        self._compact = compact
-        self._apply_compact_layout()
-        self._reposition_after_resize(old_geometry)
-        if not compact:
-            self.raise_()
-            self.activateWindow()
-
-    def _apply_compact_layout(self) -> None:
-        self.card.setVisible(not self._compact)
-        self.ball.setVisible(self._compact)
-        self.setFixedSize(_BALL_SIZE if self._compact else _CARD_SIZE)
-        self.setToolTip("双击展开 · 拖动移动" if self._compact else "")
-        self.ball.update()
-
-    def _reposition_after_resize(self, old: QRect) -> None:
-        """Grow/shrink toward the screen center, keeping the edge nearest the
-        screen border fixed, so expanding a ball parked in a corner doesn't
-        push the card off-screen."""
-        screen = QGuiApplication.screenAt(old.center()) or self._target_screen()
-        if screen is None:
-            return
-        geo = screen.availableGeometry()
-        w, h = self.width(), self.height()
-        x = old.right() + 1 - w if old.center().x() > geo.center().x() else old.left()
-        y = old.bottom() + 1 - h if old.center().y() > geo.center().y() else old.top()
-        x = max(geo.left(), min(x, geo.right() + 1 - w))
-        y = max(geo.top(), min(y, geo.bottom() + 1 - h))
         self.move(x, y)
 
     def _ball_colors(self) -> tuple[str, str, str]:
@@ -559,20 +434,14 @@ class PomodoroWindow(QWidget):
             # Task re-attributed elsewhere (switched focus / completed a task).
             # Only the label changes — the timer keeps running untouched.
             self._set_task(payload)
-        elif event == "mode_changed":
-            self._refresh_mode_button()
-        elif event == "env_mode_changed":
-            self._refresh_env_button()
         elif event == "paused":
             self._stop_blink()
             self._hide_break_reminder()
             self._set_phase("paused")
-            self.toggle_btn.setText("继续")
         elif event == "resumed":
             snap = PomodoroService.instance().snapshot()
             self._set_phase(snap["phase"])
             self._update_tip(snap["phase"])
-            self.toggle_btn.setText("暂停")
         elif event == "stopped":
             self._stop_blink()
             self._hide_break_reminder()
@@ -595,73 +464,35 @@ class PomodoroWindow(QWidget):
         elif event == "idle_warning_off":
             self._stop_blink()
 
-        snapshot = PomodoroService.instance().snapshot()
-        # Don't clobber the blinking 🍅 — let the blink timer keep driving
-        # cycles_label until idle_warning_off lands. Otherwise every tick
-        # event would briefly restore the full "🍅 N" text and cause a
-        # visible jitter.
-        if not self._idle_warning_active:
-            self.cycles_label.setText(self._current_cycles_text())
-        self._refresh_action_visibility(snapshot["phase"])
-        self._refresh_env_button()
-
     def _set_phase(self, phase: str) -> None:
-        label, color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
+        label, _color = _PHASE_LABEL.get(phase, ("空闲", SUBTEXT_COLOR_HEX))
         # Remember "what the label should look like when not blinking", so
         # _stop_blink() can restore it without needing to re-poll the service.
         self._phase = phase
         self._normal_phase_text = label
-        self._normal_phase_color = color
-        self.phase_label.setText(label)
-        self.phase_label.setStyleSheet(
-            f"color: {color}; font-size: 12px; font-weight: 600;"
-        )
         self.ball.update()
 
     def _set_remaining(self, seconds: int) -> None:
-        self.time_label.setText(_format_remaining(seconds))
+        self._time_text = _format_remaining(seconds)
         self.ball.update()
 
     def _set_task(self, text: str) -> None:
         if text:
-            shown = text if len(text) <= 28 else text[:27] + "…"
-            self.task_label.setText(f"→ {shown}")
+            self._task_text = text if len(text) <= 28 else text[:27] + "…"
         else:
-            self.task_label.setText("")
+            self._task_text = ""
 
     def _update_tip(self, phase: str) -> None:
         if phase == "planning":
-            self.tip_label.setText("📝 写下今日最重要的 3 件事，其余往后排")
-            self.tip_label.setVisible(True)
+            self._tip_text = "📝 写下今日最重要的 3 件事，其余往后排"
         elif phase == "lunch_break":
-            self.tip_label.setText("🍚 午餐时间，好好吃饭休息，别工作")
-            self.tip_label.setVisible(True)
+            self._tip_text = "🍚 午餐时间，好好吃饭休息，别工作"
         elif phase in ("short_break", "long_break"):
-            self.tip_label.setText(random.choice(_BREAK_TIPS))
-            self.tip_label.setVisible(True)
+            self._tip_text = random.choice(_BREAK_TIPS)
         elif phase == "working":
-            self.tip_label.setText(random.choice(_WORK_TIPS))
-            self.tip_label.setVisible(True)
+            self._tip_text = random.choice(_WORK_TIPS)
         else:
-            self.tip_label.clear()
-            self.tip_label.setVisible(False)
-
-    def _refresh_action_visibility(self, phase: str) -> None:
-        if phase in ("working", "planning"):
-            self.extend_btn.setVisible(True)
-            self.extend_btn.setText("+5m")
-            self.skip_break_btn.setVisible(False)
-            self.finish_btn.setVisible(True)
-        elif phase in ("short_break", "long_break"):
-            self.extend_btn.setVisible(True)
-            self.extend_btn.setText("休息+2m")
-            self.skip_break_btn.setVisible(True)
-            self.finish_btn.setVisible(False)
-        else:
-            # idle / paused / lunch_break: no extend, and lunch can't be skipped
-            self.extend_btn.setVisible(False)
-            self.skip_break_btn.setVisible(False)
-            self.finish_btn.setVisible(False)
+            self._tip_text = ""
 
     # ---------- button slots ----------
 
@@ -697,120 +528,210 @@ class PomodoroWindow(QWidget):
 
         PomodoroService.instance().acknowledge_idle()
 
-    def _on_toggle_mode_clicked(self) -> None:
+    @staticmethod
+    def _set_mode(mode: str) -> None:
         from shouyu.service.pomodoro import PomodoroService
 
-        svc = PomodoroService.instance()
-        new_mode = (
-            PomodoroService.MODE_DEEP
-            if svc.mode() == PomodoroService.MODE_CLASSIC
-            else PomodoroService.MODE_CLASSIC
-        )
-        svc.set_mode(new_mode)
-        self._refresh_mode_button()
+        PomodoroService.instance().set_mode(mode)
 
-    def _refresh_mode_button(self) -> None:
+    @staticmethod
+    def _set_env_mode(mode: str) -> None:
         from shouyu.service.pomodoro import PomodoroService
 
-        is_deep = PomodoroService.instance().mode() == PomodoroService.MODE_DEEP
-        self.mode_btn.setText("深度" if is_deep else "经典")
-        self.mode_btn.setToolTip(
-            "当前: 深度 90/15 — 点击切回 经典 25/5"
-            if is_deep
-            else "当前: 经典 25/5 — 点击切到 深度 90/15"
-        )
-
-    def _on_env_btn_clicked(self) -> None:
-        from shouyu.service.pomodoro import PomodoroService
-
-        svc = PomodoroService.instance()
-        order = [
-            PomodoroService.ENV_MODE_AUTO,
-            PomodoroService.ENV_MODE_HOME,
-            PomodoroService.ENV_MODE_OFFICE,
-        ]
-        cur = svc.env_mode()
-        nxt = order[(order.index(cur) + 1) % len(order)] if cur in order else order[0]
-        svc.set_env_mode(nxt)
-        self._refresh_env_button()
+        PomodoroService.instance().set_env_mode(mode)
 
     # ---------- ball context menu ----------
 
     def _show_context_menu(self, position: QPoint) -> None:
-        """Keep the compact window useful without bringing back the large UI.
+        self._build_context_menu().exec(position)
 
-        The entries intentionally mirror the tray menu and the expanded card,
-        so the ball is a complete control surface rather than just a display.
+    def _build_context_menu(self) -> QMenu:
+        """Right-click menu for the ball - the only control surface now.
+
+        Layout, top to bottom:
+          * status header (phase, countdown, 🍅 count, current task)
+          * large primary button (start / pause / resume) plus the one or two
+            actions that matter in the current phase (extend, finish early,
+            skip break, stop) - colored by phase so they stand out
+          * 深度 / 经典 segmented toggle
+          * first level: today's tasks, hide
+          * second level: logs & data, more (skin, reminder style, settings,
+            help), system (startup, restart, exit)
         """
-        menu = QMenu(self)
+        from shouyu.service.pomodoro import PomodoroService
+        from shouyu.util.reg import Registry
 
-        help_action = menu.addAction("帮助")
-        help_action.triggered.connect(self._on_help)
-        settings_action = menu.addAction("设置")
-        settings_action.triggered.connect(self._on_settings)
-        todo_action = menu.addAction("今日任务")
-        todo_action.triggered.connect(self._on_show_todo)
+        svc = PomodoroService.instance()
+        menu = QMenu(self)
+        menu.setStyleSheet(_MENU_STYLE)
+
+        _add_widget_row(menu, self._build_menu_header())
+
+        if self._alarm_active:
+            ack = _menu_button(
+                menu, "✋ 我回来了（停止警报，记一次走神）", _ALERT_RED,
+                self._on_ack_clicked, "停止警报并记一次走神",
+            )
+            _add_widget_row(menu, ack)
+
+        _add_widget_row(menu, self._build_quick_controls(menu))
+
+        mode_row = QWidget()
+        mode_layout = QHBoxLayout(mode_row)
+        mode_layout.setContentsMargins(10, 2, 10, 4)
+        mode_layout.setSpacing(6)
+        mode_label = QLabel("番茄模式")
+        mode_label.setStyleSheet(f"color: {SUBTEXT_COLOR_HEX}; font-size: 11px;")
+        mode_layout.addWidget(mode_label)
+        mode_layout.addWidget(_segmented(
+            menu,
+            [
+                (PomodoroService.MODE_CLASSIC, "经典 25/5"),
+                (PomodoroService.MODE_DEEP, "深度 90/15"),
+            ],
+            current=svc.mode(),
+            on_pick=self._set_mode,
+        ))
+        _add_widget_row(menu, mode_row)
         menu.addSeparator()
 
-        toggle_action = menu.addAction("番茄：启停")
-        toggle_action.triggered.connect(self._on_toggle_clicked)
-        # Parent the submenu explicitly so Qt owns it for the popup's lifetime.
-        skin_menu = QMenu("皮肤", menu)
-        menu.addMenu(skin_menu)
-        skin_group = QActionGroup(skin_menu)
+        menu.addAction("📋 今日任务").triggered.connect(self._on_show_todo)
+        menu.addAction("🙈 " + self._hide_action_text()).triggered.connect(self.hide)
+        menu.addSeparator()
+
+        data_menu = menu.addMenu("🗂 数据与日志")
+        data_menu.addAction("从备份恢复…").triggered.connect(self._on_restore_backup)
+        data_menu.addAction("查看待同步队列").triggered.connect(self._on_show_queue)
+        data_menu.addAction("查看错误日志").triggered.connect(self._on_show_log)
+        data_menu.addAction("查看崩溃诊断日志").triggered.connect(self._on_show_crash_log)
+
+        more_menu = menu.addMenu("⚙ 更多")
+        self._add_section_header(more_menu, "皮肤")
+        skin_group = QActionGroup(more_menu)
         skin_group.setExclusive(True)
         for skin, label in _SKIN_LABELS.items():
-            skin_action = skin_menu.addAction(label)
+            skin_action = more_menu.addAction(label)
             skin_action.setCheckable(True)
             skin_action.setChecked(skin == self._skin)
             skin_group.addAction(skin_action)
             skin_action.triggered.connect(lambda _checked=False, s=skin: self.set_skin(s))
-        phase = self._phase
-        if phase in ("working", "planning"):
-            extend_action = menu.addAction("延长 5 分钟")
-            extend_action.triggered.connect(self._on_extend_clicked)
-            finish_action = menu.addAction("去休息")
-            finish_action.triggered.connect(self._on_finish_early_clicked)
-        elif phase in ("short_break", "long_break"):
-            extend_action = menu.addAction("休息 +2 分钟")
-            extend_action.triggered.connect(self._on_extend_clicked)
-            skip_action = menu.addAction("跳过休息")
-            skip_action.triggered.connect(self._on_skip_break_clicked)
-        if self._alarm_active:
-            acknowledge_action = menu.addAction("✋ 我回来了")
-            acknowledge_action.triggered.connect(self._on_ack_clicked)
-        menu.addSeparator()
+        more_menu.addSeparator()
+        self._add_section_header(more_menu, "提醒方式")
+        env_group = QActionGroup(more_menu)
+        env_group.setExclusive(True)
+        for env_mode, label in (
+            (PomodoroService.ENV_MODE_AUTO, "自动（按时间表）"),
+            (PomodoroService.ENV_MODE_HOME, "在家（有声提醒）"),
+            (PomodoroService.ENV_MODE_OFFICE, "在单位（静音 + 弹窗）"),
+        ):
+            env_action = more_menu.addAction(label)
+            env_action.setCheckable(True)
+            env_action.setChecked(svc.env_mode() == env_mode)
+            env_group.addAction(env_action)
+            env_action.triggered.connect(lambda _checked=False, m=env_mode: self._set_env_mode(m))
+        more_menu.addSeparator()
+        more_menu.addAction("设置").triggered.connect(self._on_settings)
+        more_menu.addAction("帮助").triggered.connect(self._on_help)
 
-        backup_action = menu.addAction("从备份恢复…")
-        backup_action.triggered.connect(self._on_restore_backup)
-        queue_action = menu.addAction("查看待同步队列")
-        queue_action.triggered.connect(self._on_show_queue)
-        log_action = menu.addAction("查看错误日志")
-        log_action.triggered.connect(self._on_show_log)
-        crash_log_action = menu.addAction("查看崩溃诊断日志")
-        crash_log_action.triggered.connect(self._on_show_crash_log)
-        startup_action = menu.addAction("开机启动")
+        system_menu = menu.addMenu("⏻ 系统")
+        startup_action = system_menu.addAction("开机启动")
         startup_action.setCheckable(True)
-        from shouyu.util.reg import Registry
-
         startup_action.setChecked(Registry.is_auto_run("shouyu"))
         startup_action.triggered.connect(self._on_toggle_startup)
-        restart_action = menu.addAction("重启")
-        restart_action.triggered.connect(self._on_restart)
-        menu.addSeparator()
+        system_menu.addAction("重启").triggered.connect(self._on_restart)
+        system_menu.addSeparator()
+        system_menu.addAction("退出").triggered.connect(self._on_exit)
+        return menu
 
-        hide_action = menu.addAction(self._hide_action_text())
-        hide_action.setToolTip("隐藏圆球；可用同一个快捷键再次显示")
-        hide_action.triggered.connect(self.hide)
-        menu.addSeparator()
+    @staticmethod
+    def _add_section_header(menu: QMenu, text: str) -> None:
+        header = menu.addAction(text)
+        header.setEnabled(False)
 
-        stop_action = menu.addAction("停止")
-        stop_action.triggered.connect(self._on_stop_clicked)
-        menu.addSeparator()
+    def _status_text_and_color(self) -> tuple[str, str]:
+        if self._alarm_active:
+            return "🚨 快回来工作", _ALERT_RED
+        if self._idle_warning_active:
+            return "⚠ 已静止", _ALERT_RED
+        label, color = _PHASE_LABEL.get(self._phase, ("空闲", SUBTEXT_COLOR_HEX))
+        return label, color
 
-        exit_action = menu.addAction("退出")
-        exit_action.triggered.connect(self._on_exit)
-        menu.exec(position)
+    def _build_menu_header(self) -> QWidget:
+        header = QWidget()
+        layout = QVBoxLayout(header)
+        layout.setContentsMargins(12, 8, 12, 6)
+        layout.setSpacing(2)
+
+        top = QHBoxLayout()
+        status_text, status_color = self._status_text_and_color()
+        status = QLabel(status_text)
+        status.setStyleSheet(f"color: {status_color}; font-size: 12px; font-weight: 700;")
+        top.addWidget(status)
+        top.addStretch(1)
+        count = QLabel(self._current_cycles_text())
+        count.setStyleSheet(f"color: {SUBTEXT_COLOR_HEX}; font-size: 12px;")
+        top.addWidget(count)
+        layout.addLayout(top)
+
+        time_label = QLabel(self._time_text)
+        time_label.setStyleSheet(f"color: {TEXT_COLOR_HEX}; font-size: 28px; font-weight: 700;")
+        layout.addWidget(time_label)
+
+        if self._task_text:
+            detail, detail_color = f"→ {self._task_text}", ACCENT_COLOR_HEX
+        elif self._tip_text:
+            detail, detail_color = self._tip_text, SUBTEXT_COLOR_HEX
+        else:
+            detail, detail_color = "点击下方按钮开始一个番茄", SUBTEXT_COLOR_HEX
+        detail_label = QLabel(detail)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet(f"color: {detail_color}; font-size: 11px;")
+        layout.addWidget(detail_label)
+        return header
+
+    def _build_quick_controls(self, menu: QMenu) -> QWidget:
+        """Primary button on the first row, phase-specific secondary buttons
+        below it. Idle shows only the start button."""
+        phase = self._phase
+        controls = QWidget()
+        grid = QGridLayout(controls)
+        grid.setContentsMargins(8, 2, 8, 2)
+        grid.setSpacing(6)
+
+        if phase == "idle":
+            primary_text, primary_bg = "▶ 开始一个番茄", ACCENT_COLOR_HEX
+        elif phase == "paused":
+            primary_text, primary_bg = "▶ 继续", ACCENT_COLOR_HEX
+        elif phase in ("short_break", "long_break", "lunch_break"):
+            primary_text, primary_bg = "⏸ 暂停", _BREAK_BUTTON_COLOR
+        else:
+            primary_text, primary_bg = "⏸ 暂停", _FOCUS_BUTTON_COLOR
+        grid.addWidget(
+            _menu_button(menu, primary_text, primary_bg, self._on_toggle_clicked),
+            0, 0, 1, 3,
+        )
+
+        secondary = []
+        if phase in ("working", "planning"):
+            secondary.append(("+5 分钟", "延长当前阶段 5 分钟", self._on_extend_clicked))
+            secondary.append((
+                "⏭ 去休息", "任务提前做完了？结束这个番茄，直接进入休息（计一个 🍅）",
+                self._on_finish_early_clicked,
+            ))
+        elif phase in ("short_break", "long_break"):
+            secondary.append(("+2 分钟", "延长休息 2 分钟", self._on_extend_clicked))
+            secondary.append((
+                "⏭ 跳过休息", "跳过休息，回到专注（不推荐，会被记录）",
+                self._on_skip_break_clicked,
+            ))
+        if phase != "idle":
+            secondary.append(("⏹ 停止", "结束当前番茄", self._on_stop_clicked))
+
+        for col, (text, tip, callback) in enumerate(secondary):
+            grid.addWidget(_menu_button(menu, text, _NEUTRAL_BUTTON_COLOR, callback, tip), 1, col)
+        for col in range(3):
+            grid.setColumnStretch(col, 1)
+        return controls
 
     @staticmethod
     def _hide_action_text() -> str:
@@ -882,41 +803,14 @@ class PomodoroWindow(QWidget):
         else:
             QApplication.quit()
 
-    def _refresh_env_button(self) -> None:
-        from shouyu.service.pomodoro import PomodoroService
-
-        svc = PomodoroService.instance()
-        setting = svc.env_mode()
-        resolved = svc.resolved_env_mode()
-        if setting == PomodoroService.ENV_MODE_HOME:
-            self.env_btn.setText("🏠 在家")
-            self.env_btn.setToolTip("在家：柔和提示音 — 点击切到 在单位")
-        elif setting == PomodoroService.ENV_MODE_OFFICE:
-            self.env_btn.setText("🏢 单位")
-            self.env_btn.setToolTip("在单位：静音 + 全屏弹窗 — 点击切回 自动")
-        else:
-            is_office = resolved == PomodoroService.ENV_MODE_OFFICE
-            self.env_btn.setText("🔄 自动·" + ("司" if is_office else "家"))
-            self.env_btn.setToolTip(
-                "自动：按时间表决定，当前 = "
-                + ("在单位(静音弹窗)" if is_office else "在家(有声)")
-                + " — 点击切到 在家"
-            )
-
     # ---------- idle-warning blink ----------
 
-    _ALERT_RED = "#FF3B30"
-    _ALERT_BORDER_DIM = "#7A1F1B"
 
     def _start_blink(self, idle_seconds: int) -> None:
         """Enter the "user is drifting off" alert mode.
 
-        Visual:
-          * card border switches to a steady red (so the whole window
-            visually screams), so user notices it from peripheral vision
-          * 🍅 emoji in `cycles_label` flickers on/off every 500ms — the
-            literal "tomato is blinking" the user asked for
-          * phase label changes to "⚠ 已静止 Nm" in red
+        Visual: the ball's halo pulses red and its caption reads "⚠ 静止"
+        (see _BallView). The right-click menu header shows "⚠ 已静止".
 
         We deliberately do NOT raise / re-show the window if the user has
         manually hidden it: respecting the hide gesture is more important
@@ -925,12 +819,6 @@ class PomodoroWindow(QWidget):
         self._idle_warning_active = True
         self._alarm_active = False
         self._blink_idle_seconds = idle_seconds
-        minutes = max(1, idle_seconds // 60)
-        self.phase_label.setText(f"⚠ 已静止 {minutes}m")
-        self.phase_label.setStyleSheet(
-            f"color: {self._ALERT_RED}; font-size: 12px; font-weight: 700;"
-        )
-        self._apply_card_alert_style(True)
         self._blink_timer.setInterval(500)
         self._blink_on = True
         self._on_blink_tick()  # flip immediately, don't wait 500ms
@@ -943,27 +831,17 @@ class PomodoroWindow(QWidget):
           * forces the window back on-screen and to the front even if the
             user had hidden it (respecting the hide gesture is no longer more
             important than getting you back to work);
-          * blinks faster (250ms) and shows a louder "🚨 快回来工作" label;
-          * surfaces the red "✋ 我回来了" button, which is the only way to
-            dismiss it (moving the mouse won't).
+          * blinks faster (250ms) and the ball caption reads "🚨 回来";
+          * puts a red "✋ 我回来了" button at the top of the right-click
+            menu, which is the only way to dismiss it (moving the mouse won't).
         """
         self._idle_warning_active = True
         self._alarm_active = True
         self._blink_idle_seconds = idle_seconds
-        minutes = max(1, idle_seconds // 60)
-        self.phase_label.setText(f"🚨 快回来工作 {minutes}m")
-        self.phase_label.setStyleSheet(
-            f"color: {self._ALERT_RED}; font-size: 12px; font-weight: 800;"
-        )
-        self.ack_btn.setVisible(True)
-        self._apply_card_alert_style(True)
         self._blink_timer.setInterval(250)
         self._blink_on = True
         self._on_blink_tick()
         self._blink_timer.start()
-        if self._compact:
-            self.set_compact(False)
-            self._expanded_by_alarm = True
         # Force the window back so it can't be ignored from behind other apps.
         self.summon()
 
@@ -982,21 +860,7 @@ class PomodoroWindow(QWidget):
         self._blink_timer.setInterval(500)
         self._idle_warning_active = False
         self._alarm_active = False
-        self.ack_btn.setVisible(False)
         self._hide_overlay()
-        # Restore phase label from what _set_phase last cached.
-        self.phase_label.setText(self._normal_phase_text)
-        self.phase_label.setStyleSheet(
-            f"color: {self._normal_phase_color}; font-size: 12px; font-weight: 600;"
-        )
-        # Restore the cycles_label by re-deriving it (handle_event already
-        # does this after every event, but on a fresh stop the user might
-        # not see another event for a while — re-deriving keeps things
-        # in sync immediately).
-        self._refresh_cycles_label()
-        self._apply_card_alert_style(False)
-        if self._expanded_by_alarm:
-            self.set_compact(True)
         self.ball.update()
 
     def _show_overlay(self, idle_seconds: int) -> None:
@@ -1043,30 +907,9 @@ class PomodoroWindow(QWidget):
         self._hide_break_reminder()
 
     def _on_blink_tick(self) -> None:
-        # Toggle the 🍅 emoji visibility — text-level blink instead of
-        # opacity, because Qt's QLabel doesn't get a setOpacity for free
-        # without QGraphicsOpacityEffect (overkill for a one-glyph blink).
-        snapshot_text = self._current_cycles_text()
+        # Flip the on/off phase of the ball's pulse (see _BallView) and repaint.
         self._blink_on = not self._blink_on
-        if self._blink_on:
-            self.cycles_label.setText(snapshot_text)
-        else:
-            # Replace the leading 🍅 with a same-width-ish space so the
-            # label width doesn't jump.
-            self.cycles_label.setText(snapshot_text.replace("🍅", " ", 1))
         self.ball.update()
-
-    def _apply_card_alert_style(self, alert: bool) -> None:
-        border_color = self._ALERT_RED if alert else "#3A3A3A"
-        self.card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {PANEL_COLOR_HEX};
-                border-radius: 14px;
-                border: 1px solid {border_color};
-            }}
-            """
-        )
 
     def _current_cycles_text(self) -> str:
         """Compute the cycles_label text (🍅 N · 跳休 M) from current state.
@@ -1093,9 +936,6 @@ class PomodoroWindow(QWidget):
         except Exception:
             pass
         return text
-
-    def _refresh_cycles_label(self) -> None:
-        self.cycles_label.setText(self._current_cycles_text())
 
     # ---------- summon (cross-thread show) ----------
 
@@ -1145,11 +985,8 @@ class PomodoroWindow(QWidget):
     # ---------- drag support ----------
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
-        if self._compact:
-            self._show_context_menu(event.globalPos())
-            event.accept()
-        else:
-            super().contextMenuEvent(event)
+        self._show_context_menu(event.globalPos())
+        event.accept()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -1169,13 +1006,6 @@ class PomodoroWindow(QWidget):
         self._drag_offset = None
         super().mouseReleaseEvent(event)
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if self._compact and event.button() == Qt.LeftButton:
-            self._drag_offset = None
-            self.set_compact(False)
-            event.accept()
-        else:
-            super().mouseDoubleClickEvent(event)
 
 
 class _BallView(QWidget):
@@ -1319,7 +1149,7 @@ class _BallView(QWidget):
         time_font = QFont("Segoe UI", 1)
         time_font.setPixelSize(19)
         time_font.setWeight(QFont.DemiBold)
-        cls._draw_text(painter, time_rect, time_font, owner.time_label.text(), 255)
+        cls._draw_text(painter, time_rect, time_font, owner._time_text, 255)
 
         caption_font = QFont("Microsoft YaHei UI", 1)
         caption_font.setPixelSize(10)
