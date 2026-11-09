@@ -47,6 +47,10 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-11-09
+
+- **Ctrl+Win+↑ 把窗口铺满上方两块屏**：新增可配置热键 `[shortcuts] span_monitors`，默认 `ctrl+windows+up`，按下后把当前窗口（如 Cursor、DBeaver）拉伸到主屏上方所有显示器的合并区域，不占任务栏；对同一窗口再按一次还原到原位置和大小，原来是最大化的仍恢复为最大化。按物理像素计算，补偿 Win10/11 的隐形边框，并处理主屏 125% 与外接屏 100% 缩放不同时窗口自行缩放的问题。留空即关闭。（`kb.ini`、`shouyu/action/shortcut.py`、`shouyu/util/window.py`）
+
 ## 2026-11-08
 
 - **Win+J 打开「运行」（替代被屏蔽的 Win+R）**：查明本机 Win+R 失效的根因是公司启用的 Windows 键盘筛选器（`MsKeyboardFilter`）屏蔽了 Win+R，按键在到达任何程序前就被吞掉。新增可配置热键 `[shortcuts] run_dialog`，默认 `windows+j`（Windows 11 未占用），按下即调起「运行」对话框；留空即关闭。打开「运行」时记一行日志，带上实际触发的热键和 explorer pid（如 `windows+j: opened run dialog, explorer pid=...`）。（`kb.ini`、`shouyu/action/shortcut.py`、`shouyu/util/process.py`）

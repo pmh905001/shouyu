@@ -19,6 +19,7 @@ from shouyu.queue import TaskExecutor
 from shouyu.service.context import ExcelContext
 from shouyu.service.excel import KbExcel
 from shouyu.util.process import ProcessManager
+from shouyu.util.window import WindowManager
 
 
 class Shortcut:
@@ -315,6 +316,9 @@ class Shortcut:
         run_dialog_key = Config.get_shortcut('run_dialog')
         cls._add_hot_key_from_config('run_dialog', ProcessManager.open_run_dialog,
                                      args=(run_dialog_key,), is_in_queue=False)
+        span_key = Config.get_shortcut('span_monitors')
+        cls._add_hot_key_from_config('span_monitors', WindowManager.toggle_span_monitors,
+                                     args=(span_key,), is_in_queue=False)
         # HACK: keyboard caught windows+l pressed event when user is locking screen,
         # but missing the released event.
         keyboard.add_hotkey('windows+l', cls.clear_pressed_events)
