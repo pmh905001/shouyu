@@ -189,6 +189,87 @@ class KbExcel:
                 anchor = f'{get_column_letter(self._find_max_column_index(worksheet))}{worksheet.max_row}'
                 return anchor, self._active_worksheet[anchor].value
 
+    def recent_entries(self, limit: int) -> list:
+        """Newest-first list of up to `limit` entries from today's sheet.
+
+        Only rows with content are counted. A picture counts as one entry and
+        is placed at its anchor row; the blank rows it covers are skipped and
+        not counted. Returns dicts:
+          {'kind': 'text', 'label': 'B534', 'text': '...'}
+          {'kind': 'image', 'label': 'B530', 'png': bytes or None}
+        """
+        ws = self._active_worksheet
+
+        # Build {row: [(col, coordinate, value)]} from the sheet's stored cells.
+        # Reading ws._cells avoids ws.cell(), which would create empty cells.
+        values_by_row: dict = {}
+        for (row, col), cell in ws._cells.items():
+            if cell.value is None or cell.value == '':
+                continue
+            values_by_row.setdefault(row, []).append((col, cell.coordinate, cell.value))
+
+        images = []  # (first_row, last_row, anchor_coordinate, image)
+        for img in ws._images:
+            first = img.anchor._from.row + 1
+            last = self._image_last_row(ws, img, first)
+            anchor_coord = f'{get_column_letter(img.anchor._from.col + 1)}{first}'
+            images.append((first, last, anchor_coord, img))
+
+        # The label text written into an image's anchor cell duplicates the picture.
+        label_coords = {coord for _, _, coord, _ in images}
+        images_starting_at: dict = {}
+        for item in images:
+            images_starting_at.setdefault(item[0], []).append(item)
+
+        top = max([ws.max_row] + [last for _, last, _, _ in images])
+        entries: list = []
+        for row in range(top, 0, -1):
+            if len(entries) >= limit:
+                break
+            cells = sorted(
+                (c for c in values_by_row.get(row, []) if c[1] not in label_coords),
+                key=lambda c: c[0],
+            )
+            if cells:
+                entries.append({
+                    'kind': 'text',
+                    'label': ' / '.join(coord for _, coord, _ in cells),
+                    'text': '    '.join(str(value) for _, _, value in cells),
+                })
+            for _, _, coord, img in images_starting_at.get(row, []):
+                if len(entries) >= limit:
+                    break
+                entries.append({'kind': 'image', 'label': coord, 'png': self._image_bytes(img)})
+        return entries
+
+    @staticmethod
+    def _image_last_row(ws: Worksheet, img, first: int) -> int:
+        """Last row (1-based) a picture covers, using its real anchor size."""
+        anchor = img.anchor
+        to = getattr(anchor, 'to', None)
+        if to is not None:  # two-cell anchor: the end cell is stored directly
+            return max(first, to.row + 1)
+        ext = getattr(anchor, 'ext', None)
+        height_px = ext.height / 9525 if ext is not None and ext.height else img.height  # EMU -> px
+        default_pt = ws.sheet_format.defaultRowHeight or 15
+        remaining = float(height_px)
+        row = first
+        while True:
+            dim = ws.row_dimensions.get(row)
+            pt = dim.height if dim is not None and dim.height else default_pt
+            remaining -= pt * 4 / 3  # points -> pixels at 96 dpi
+            if remaining <= 0:
+                return row
+            row += 1
+
+    @staticmethod
+    def _image_bytes(img) -> Optional[bytes]:
+        try:
+            return img._data()  # openpyxl keeps the loaded picture bytes here
+        except Exception:
+            logging.exception('failed to read picture from workbook')
+            return None
+
     def _next_anchor(self, worksheet: Union[str, Worksheet], column_offset: int = 0, row_offset: int = 0) -> str:
         if isinstance(worksheet, str):
             worksheet: Worksheet = self._workbook.get_sheet_by_name(worksheet)

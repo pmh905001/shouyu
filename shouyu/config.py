@@ -74,6 +74,12 @@ class Config:
         return int(cls.get('max_backups', '100'))
 
     @classmethod
+    def status_rows(cls):
+        """How many of the latest non-blank rows the alt+/ window shows.
+        Images count as one row; blank rows they cover are skipped. Default: 10."""
+        return int(cls.get('status_rows', '10'))
+
+    @classmethod
     def get_shortcut(cls, key, default=None, convert=None):
         return cls.get(key, default, 'shortcuts', convert)
 

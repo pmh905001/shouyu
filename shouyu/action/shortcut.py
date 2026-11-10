@@ -119,8 +119,27 @@ class Shortcut:
             preview = copied_text[:60]
 
         message_queue.enqueue('clipboard_append', payload, attachment_id=attachment_id)
-        dispatch.notify_recorded('已记录', preview)
+        dispatch.notify_recorded('已记录', f'{Shortcut._target_column_label(column)} 列 · {preview}')
         dispatch.kick()
+
+    @staticmethod
+    def _target_column_label(column: Optional[str]) -> str:
+        """Column letter the record will be written to, for the '已记录' toast.
+
+        An explicit column (ctrl+c x2/x3, alt+print screen x2) wins. Otherwise
+        it is the default detail column plus any pending move_column steps -
+        the same formula KbExcel._next_anchor uses at write time, so the toast
+        does not have to read Excel on the hotkey thread.
+        """
+        if column:
+            return column
+        from openpyxl.utils import column_index_from_string, get_column_letter
+
+        from shouyu.service.plan import OTHER_DETAIL_COLUMN
+        try:
+            return get_column_letter(column_index_from_string(OTHER_DETAIL_COLUMN) + ExcelContext.column_steps)
+        except ValueError:
+            return '?'
 
     @classmethod
     @action_handler
@@ -178,7 +197,18 @@ class Shortcut:
     @action_handler
     def show_status(cls):
         logging.info('show status')
-        KbExcel().move_column()
+        from shouyu.view.qt_app import QtApp
+
+        # move_column() keeps its usual effects (column steps and the column
+        # title), but its one-line toast is replaced by the rows window.
+        ExcelContext.show_pop_up_message = False
+        try:
+            kb_excel = KbExcel()
+            kb_excel.move_column()
+        finally:
+            ExcelContext.show_pop_up_message = True
+        title = kb_excel._pop_up_msgs['title']
+        QtApp.show_recent_rows(title, kb_excel.recent_entries(Config.status_rows()))
 
     @classmethod
     @action_handler

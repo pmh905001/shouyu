@@ -47,9 +47,17 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 
 > 约定：每次改动都在本节最上方按日期追加条目（最新在前）。每条注明「做了什么 + 涉及文件」。
 
+## 2026-11-10
+
+- **alt+/ 改为窗口显示最近多行内容（文字与图片）**：原来只用一条 toast 显示最后一行，内容太少。现在弹出窗口，按从旧到新列出当天表格最近 N 行，最新的在底部；图片与文字一起显示，图片按实际占用的行高计算，覆盖的空行不计入。行数在 `kb.ini` `[basic]` 的 `status_rows` 配置，默认 10。窗口按 Esc 关闭。窗口默认放在鼠标所在屏幕的右下角（任务栏之上），尺寸 720×820，图片上限 640×480。（`shouyu/view/recent_rows_dialog.py`、`shouyu/view/qt_app.py`、`shouyu/service/excel.py`、`shouyu/action/shortcut.py`、`shouyu/config.py`、`kb.ini`）
+
 ## 2026-11-09
 
 - **Ctrl+Win+↑ 把窗口铺满上方两块屏**：新增可配置热键 `[shortcuts] span_monitors`，默认 `ctrl+windows+up`，按下后把当前窗口（如 Cursor、DBeaver）拉伸到主屏上方所有显示器的合并区域，不占任务栏；对同一窗口再按一次还原到原位置和大小，原来是最大化的仍恢复为最大化。按物理像素计算，补偿 Win10/11 的隐形边框，并处理主屏 125% 与外接屏 100% 缩放不同时窗口自行缩放的问题。留空即关闭。（`kb.ini`、`shouyu/action/shortcut.py`、`shouyu/util/window.py`）
+
+## 2026-11-09
+
+- **「已记录」提示显示保存的列**：保存文字或截图的提示，现在会在开头标出写入的列（如「B 列 · 截图」）。ctrl+c 连按、alt+print screen 连按等指定列的保存显示指定列；ctrl+shift+enter、OCR 等默认保存显示默认列 B，并计入 move_column 的偏移，与实际写入位置一致，不需要额外读取 Excel。（`shouyu/action/shortcut.py`）
 
 ## 2026-11-08
 

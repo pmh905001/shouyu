@@ -27,6 +27,7 @@ class _QtBridge(QObject):
     crash_notice_signal = Signal(str)
     ocr_capture_signal = Signal(str)  # payload = target column, or ""
     quit_signal = Signal()
+    recent_rows_signal = Signal(str, object)  # (title, entries from KbExcel.recent_entries)
 
     @Slot()
     def _on_show_todo(self) -> None:
@@ -152,6 +153,15 @@ class _QtBridge(QObject):
         except Exception:
             logging.exception("failed to run OCR capture")
 
+    @Slot(str, object)
+    def _on_recent_rows(self, title: str, entries: list) -> None:
+        try:
+            from shouyu.view.recent_rows_dialog import RecentRowsDialog
+
+            RecentRowsDialog.show_entries(title, entries)
+        except Exception:
+            logging.exception("failed to show recent rows window")
+
     @Slot()
     def _on_quit(self) -> None:
         app = QApplication.instance()
@@ -194,6 +204,7 @@ class QtApp:
             cls._bridge.save_status_signal.connect(cls._bridge._on_save_status, Qt.QueuedConnection)
             cls._bridge.crash_notice_signal.connect(cls._bridge._on_crash_notice, Qt.QueuedConnection)
             cls._bridge.ocr_capture_signal.connect(cls._bridge._on_ocr_capture, Qt.QueuedConnection)
+            cls._bridge.recent_rows_signal.connect(cls._bridge._on_recent_rows, Qt.QueuedConnection)
             cls._bridge.quit_signal.connect(cls._bridge._on_quit, Qt.QueuedConnection)
         finally:
             cls._ready.set()
@@ -271,6 +282,14 @@ class QtApp:
             logging.warning("Qt bridge not ready; cannot show save status")
             return
         cls._bridge.save_status_signal.emit(level or 'info', title or "", message or "")
+
+    @classmethod
+    def show_recent_rows(cls, title: str, entries: list) -> None:
+        """Thread-safe entry to show the alt+/ window with the latest rows."""
+        if cls._bridge is None:
+            logging.warning("Qt bridge not ready; cannot show recent rows")
+            return
+        cls._bridge.recent_rows_signal.emit(title or "", list(entries))
 
     @classmethod
     def show_crash_notice(cls, message: str) -> None:
