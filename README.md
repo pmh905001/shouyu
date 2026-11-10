@@ -50,6 +50,7 @@ Quickly record the content (text & image) of clipboard to MS/WPS Excel file by u
 ## 2026-11-10
 
 - **alt+/ 改为窗口显示最近多行内容（文字与图片）**：原来只用一条 toast 显示最后一行，内容太少。现在弹出窗口，按从旧到新列出当天表格最近 N 行，最新的在底部；图片与文字一起显示，图片按实际占用的行高计算，覆盖的空行不计入。行数在 `kb.ini` `[basic]` 的 `status_rows` 配置，默认 10。窗口按 Esc 关闭。窗口默认放在鼠标所在屏幕的右下角（任务栏之上），尺寸 720×820，图片上限 640×480。（`shouyu/view/recent_rows_dialog.py`、`shouyu/view/qt_app.py`、`shouyu/service/excel.py`、`shouyu/action/shortcut.py`、`shouyu/config.py`、`kb.ini`）
+- **Ctrl+Win+↑ 铺满上方屏幕：高度取较矮的屏**：水平方向仍为两块屏的并集；垂直方向改为取交集，窗口高度等于较矮屏幕的工作区高度，顶边和底边都不超出任何一块屏。原来取的是包围盒，高度不同的两块屏会让较矮的那块超出。（`shouyu/util/window.py`）
 
 ## 2026-11-09
 

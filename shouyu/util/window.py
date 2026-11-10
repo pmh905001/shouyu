@@ -66,10 +66,25 @@ class WindowManager:
         user32.EnumDisplayMonitors(None, None, _MonitorEnumProc(callback), 0)
         return result
 
+    @staticmethod
+    def _common_span(work_areas):
+        """Rectangle for a window that must fit on every given work area:
+        horizontally the union (the screens sit side by side), vertically the
+        intersection, so the height is the shortest screen's. Returns
+        (left, top, right, bottom), or None when the screens share no
+        vertical range."""
+        left = min(w.left for w in work_areas)
+        right = max(w.right for w in work_areas)
+        top = max(w.top for w in work_areas)
+        bottom = min(w.bottom for w in work_areas)
+        if bottom <= top:
+            return None
+        return left, top, right, bottom
+
     @classmethod
     def _span_area(cls):
-        """Union of the work areas of the monitors above the primary one;
-        falls back to every non-primary monitor if none sits above it."""
+        """Span area for the monitors above the primary one (every non-primary
+        monitor if none sits above it). See _common_span for the geometry."""
         monitors = cls._monitors()
         primary = next((m for m in monitors if m[1]), None)
         if primary is None:
@@ -79,12 +94,7 @@ class WindowManager:
         targets = above or others
         if not targets:
             return None
-        return (
-            min(m[0].left for m in targets),
-            min(m[0].top for m in targets),
-            max(m[0].right for m in targets),
-            max(m[0].bottom for m in targets),
-        )
+        return cls._common_span([m[0] for m in targets])
 
     @staticmethod
     def _invisible_border(hwnd):
@@ -128,7 +138,7 @@ class WindowManager:
 
                 area = cls._span_area()
                 if area is None:
-                    logging.info(f'{hotkey}: no secondary monitor to span')
+                    logging.info(f'{hotkey}: no span area (no secondary monitor, or no shared height)')
                     return
 
                 was_max = bool(user32.IsZoomed(hwnd))
